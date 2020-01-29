@@ -54,7 +54,7 @@ namespace OpenSage.Terrain.Roads
                 // If we already aligned this edge, skip to the next.
                 if (edge.AlignedLikeIndex >= 0)
                     continue;
-                
+
                 edge.AlignedLikeIndex = edge.Index;
 
                 // Walk along connected edges in both directions,
@@ -131,7 +131,7 @@ namespace OpenSage.Terrain.Roads
         public Vector3 Position { get; }
         public List<RoadTopologyEdge> Edges { get; } = new List<RoadTopologyEdge>();
 
-        public RoadTopologyNode(in Vector3 position)
+        public RoadTopologyNode(Vector3 position)
         {
             Position = position;
         }
