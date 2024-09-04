@@ -1,12 +1,11 @@
 ﻿using OpenSage.Content;
-using OpenSage.Data.StreamFS;
 
 namespace OpenSage
 {
     public abstract class BaseAsset : DisposableBase
     {
         public string FullName { get; private set; }
-        public string Name { get; private set; }
+        public string Name { get; internal set; }
         public uint InstanceId { get; private set; }
 
         protected void SetNameAndInstanceId(string typeName, string name)
@@ -14,13 +13,6 @@ namespace OpenSage
             Name = name;
             FullName = $"{typeName}:{name}";
             InstanceId = AssetHash.GetHash(name);
-        }
-
-        protected void SetNameAndInstanceId(Asset asset)
-        {
-            Name = asset.Name.Substring(asset.Name.IndexOf(':') + 1);
-            FullName = asset.Name;
-            InstanceId = asset.Header.InstanceId;
         }
 
         public int InternalId { get; internal set; }

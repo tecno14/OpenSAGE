@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using ImGuiNET;
@@ -8,15 +9,19 @@ using OpenSage.Content.Translation;
 using OpenSage.Logic;
 using OpenSage.Mathematics;
 using OpenSage.Network;
-using Veldrid;
 
 namespace OpenSage.Diagnostics
 {
     internal sealed class MainView : DisposableBase
     {
+        private const string IniFileName = "DeveloperMode.ini";
+
         private readonly DiagnosticViewContext _context;
         private readonly List<DiagnosticView> _views;
         private readonly IReadOnlyDictionary<MapCache, string> _maps;
+        private readonly List<PlayerTemplate> _playableSides;
+        private PlayerTemplate _faction;
+        private (MapCache, string) _map;
 
         public MainView(DiagnosticViewContext context)
         {
@@ -26,9 +31,16 @@ namespace OpenSage.Diagnostics
 
             _maps = _context.Game.AssetStore.MapCaches
                 .Where(m => _context.Game.ContentManager.GetMapEntry(m.Name) != null)
-                .Select(m => (mapCache: m, mapName: m.GetNameKey().Translate()))
-                .OrderBy(m => m.mapName)
+                .Select(m => (mapCache: m, mapName: m.IsOfficial ? m.GetNameKey().Translate() : m.Name))
+                .OrderBy(m => m.mapCache.IsOfficial ? 0 : 1).ThenBy(m => m.mapName)
                 .ToDictionary(m => m.mapCache, m => m.mapName);
+            if (_maps.FirstOrDefault() is var (mapCache, value))
+            {
+                _map = (mapCache, value);
+            }
+
+            _playableSides = _context.Game.GetPlayableSides().ToList();
+            _faction = _playableSides.FirstOrDefault();
 
             void AddView(DiagnosticView view)
             {
@@ -36,6 +48,7 @@ namespace OpenSage.Diagnostics
             }
 
             AddView(new GameView(context) { IsVisible = true });
+
             AddView(new ObjectListView(context));
             AddView(new AssetListView(context));
             AddView(new MapSettingsView(context));
@@ -54,6 +67,24 @@ namespace OpenSage.Diagnostics
             AddView(new InspectorView(context));
             AddView(new PreviewView(context));
             AddView(new CameraView(context));
+            AddView(new PartitionView(context));
+            AddView(new TextCacheView(context));
+
+            if (File.Exists(IniFileName))
+            {
+                foreach (var line in File.ReadAllText(IniFileName).Split(Environment.NewLine))
+                {
+                    var settings = line.Split(" = ");
+                    var displayName = settings[0];
+                    var visibility = bool.Parse(settings[1]);
+
+                    var view = _views.FirstOrDefault(x => x.DisplayName == displayName);
+                    if (view != null)
+                    {
+                        view.IsVisible = visibility;
+                    }
+                }
+            }
         }
 
         private void DrawTimingControls()
@@ -64,7 +95,7 @@ namespace OpenSage.Diagnostics
 
             var buttonSize = new Vector2(80.0f, 0);
 
-            ImGui.SetCursorPosX(ImGui.GetWindowContentRegionWidth() - 250);
+            ImGui.SetCursorPosX(ImGui.GetContentRegionAvail().X - 250);
             ImGui.PushStyleColor(ImGuiCol.Button, playPauseColor);
 
             if (ImGui.Button(playPauseText, buttonSize))
@@ -74,7 +105,7 @@ namespace OpenSage.Diagnostics
 
             ImGui.PopStyleColor();
 
-            ImGui.SetCursorPosX(ImGui.GetWindowContentRegionWidth() - 160);
+            ImGui.SetCursorPosX(ImGui.GetContentRegionAvail().X - 160);
 
             if (!_context.Game.IsLogicRunning)
             {
@@ -93,28 +124,11 @@ namespace OpenSage.Diagnostics
 
         public void Draw(ref bool isGameViewFocused)
         {
-            var viewport = ImGui.GetMainViewport();
-            ImGui.SetNextWindowPos(viewport.GetWorkPos());
-            ImGui.SetNextWindowSize(viewport.GetWorkSize());
-            ImGui.SetNextWindowViewport(viewport.ID);
-            ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f);
-            ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0.0f);
-            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
-
-            var windowFlags = ImGuiWindowFlags.MenuBar | ImGuiWindowFlags.NoDocking;
-            windowFlags |= ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove;
-            windowFlags |= ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoNavFocus;
-            //windowFlags |= ImGuiWindowFlags.NoBackground;
-
-            ImGui.Begin("Root", windowFlags);
-
-            ImGui.PopStyleVar(3);
-
-            ImGui.DockSpace(ImGui.GetID("DockSpace"), Vector2.Zero, ImGuiDockNodeFlags.None);
+            ImGui.DockSpaceOverViewport(0, ImGui.GetMainViewport());
 
             float menuBarHeight = 0;
 
-            if (ImGui.BeginMenuBar())
+            if (ImGui.BeginMainMenuBar())
             {
                 menuBarHeight = ImGui.GetWindowHeight();
 
@@ -130,40 +144,56 @@ namespace OpenSage.Diagnostics
 
                 if (ImGui.BeginMenu("Jump"))
                 {
-                    if (ImGui.BeginMenu("Map"))
+                    if (ImGui.BeginMenu("Faction: " + _faction?.Side ?? "<null reference>"))
                     {
-                        foreach (var mapCache in _maps)
-                        {                           
-                            if (ImGui.MenuItem($"{mapCache.Value} ({mapCache.Key.Name})"))
+                        foreach (var side in _playableSides)
+                        {
+                            if (ImGui.MenuItem(side.Side))
                             {
-                                var random = new Random();
-                                var playableSides = _context.Game.GetPlayableSides().ToList();
-                                //var faction1 = playableSides[random.Next(0, playableSides.Count())];
-                                //var faction2 = playableSides[random.Next(0, playableSides.Count())];
-                                var faction1 = playableSides[3];
-                                var faction2 = playableSides[3];
-
-                                if (mapCache.Key.IsMultiplayer)
-                                {
-                                    _context.Game.StartMultiPlayerGame(
-                                        mapCache.Key.Name,
-                                        new EchoConnection(),
-                                        new PlayerSetting?[]
-                                        {
-                                            new PlayerSetting(null, faction1, new ColorRgb(255, 0, 0), PlayerOwner.Player),
-                                            new PlayerSetting(null, faction2, new ColorRgb(255, 255, 255), PlayerOwner.EasyAi),
-                                        },
-                                        0
-                                    );
-                                }
-                                else
-                                {
-                                    _context.Game.StartSinglePlayerGame(mapCache.Key.Name);
-                                }
+                                _faction = side;
+                                ImGui.SetWindowFocus(side.Name);
                             }
                         }
 
                         ImGui.EndMenu();
+                    }
+
+                    if (ImGui.BeginMenu("Map: " + _map.Item2))
+                    {
+                        foreach (var mapCache in _maps)
+                        {
+                            if (ImGui.MenuItem(mapCache.Value))
+                            {
+                                _map = (mapCache.Key, mapCache.Value);
+                            }
+                        }
+
+                        ImGui.EndMenu();
+                    }
+
+                    if (ImGui.Button("Go!"))
+                    {
+                        var random = new Random();
+                        var faction2 = _playableSides[random.Next(0, _playableSides.Count())];
+
+                        if (_map.Item1.IsMultiplayer)
+                        {
+                            _context.Game.StartSkirmishOrMultiPlayerGame(
+                                _map.Item1.Name,
+                                new EchoConnection(),
+                                new PlayerSetting[]
+                                {
+                                    new PlayerSetting(1, $"Faction{_faction.Side}", new ColorRgb(255, 0, 0), 0, PlayerOwner.Player),
+                                    new PlayerSetting(2, $"Faction{faction2.Side}", new ColorRgb(255, 255, 255), 0, PlayerOwner.EasyAi),
+                                },
+                                Environment.TickCount,
+                                false
+                            );
+                        }
+                        else
+                        {
+                            _context.Game.StartSinglePlayerGame(_map.Item1.Name);
+                        }
                     }
 
                     ImGui.EndMenu();
@@ -191,10 +221,10 @@ namespace OpenSage.Diagnostics
                     {
                         _context.Game.GraphicsDevice.SyncToVerticalBlank = isVSyncEnabled;
                     }
-                    var isFullscreen = _context.Game.Window.Fullscreen;
+                    var isFullscreen = _context.Window.Fullscreen;
                     if (ImGui.MenuItem("Fullscreen", "Alt+Enter", ref isFullscreen, true))
                     {
-                        _context.Game.Window.Fullscreen = isFullscreen;
+                        _context.Window.Fullscreen = isFullscreen;
                     }
                     ImGui.EndMenu();
                 }
@@ -202,12 +232,13 @@ namespace OpenSage.Diagnostics
                 if (_context.Game.Configuration.UseRenderDoc && ImGui.BeginMenu("RenderDoc"))
                 {
                     var renderDoc = Game.RenderDoc;
+                    var isRenderDocActive = renderDoc != null;
 
-                    if (ImGui.MenuItem("Trigger Capture"))
+                    if (ImGui.MenuItem("Trigger Capture", isRenderDocActive))
                     {
                         renderDoc.TriggerCapture();
                     }
-                    if (ImGui.BeginMenu("Options"))
+                    if (ImGui.BeginMenu("Options", isRenderDocActive))
                     {
                         bool allowVsync = renderDoc.AllowVSync;
                         if (ImGui.Checkbox("Allow VSync", ref allowVsync))
@@ -252,11 +283,11 @@ namespace OpenSage.Diagnostics
                         }
                         ImGui.EndMenu();
                     }
-                    if (ImGui.MenuItem("Launch Replay UI"))
+                    if (ImGui.MenuItem("Launch Replay UI", isRenderDocActive))
                     {
                         renderDoc.LaunchReplayUI();
                     }
-                  
+
                     ImGui.EndMenu();
                 }
 
@@ -264,10 +295,10 @@ namespace OpenSage.Diagnostics
 
                 var fpsText = $"{ImGui.GetIO().Framerate:N2} FPS";
                 var fpsTextSize = ImGui.CalcTextSize(fpsText).X;
-                ImGui.SetCursorPosX(ImGui.GetWindowContentRegionWidth() - fpsTextSize);
+                ImGui.SetCursorPosX(ImGui.GetContentRegionAvail().X - fpsTextSize);
                 ImGui.Text(fpsText);
 
-                ImGui.EndMenuBar();
+                ImGui.EndMainMenuBar();
             }
 
             foreach (var view in _views)
@@ -286,7 +317,7 @@ namespace OpenSage.Diagnostics
 
                 const int launcherImagePadding = 10;
                 ImGui.SetNextWindowPos(new Vector2(
-                    _context.Game.Window.ClientBounds.Width - launcherImageSize.Width - launcherImagePadding,
+                    _context.Window.ClientBounds.Width - launcherImageSize.Width - launcherImagePadding,
                     menuBarHeight + launcherImagePadding));
 
                 ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
@@ -303,8 +334,15 @@ namespace OpenSage.Diagnostics
                 ImGui.End();
                 ImGui.PopStyleVar();
             }
+        }
 
-            ImGui.End();
+        protected override void Dispose(bool disposeManagedResources)
+        {
+            File.WriteAllText(
+                IniFileName,
+                string.Join(Environment.NewLine, _views.Select(x => $"{x.DisplayName} = {x.IsVisible}")));
+
+            base.Dispose(disposeManagedResources);
         }
     }
 }

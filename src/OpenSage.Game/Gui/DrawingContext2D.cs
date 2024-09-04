@@ -17,7 +17,7 @@ namespace OpenSage.Gui
 
         private readonly SpriteBatch _spriteBatch;
 
-        private readonly TextCache _textCache;
+        internal readonly TextCache TextCache;
 
         private readonly Stack<Matrix3x2> _transformStack;
         private Matrix3x2 _currentTransform;
@@ -27,6 +27,8 @@ namespace OpenSage.Gui
         private float _currentOpacity;
 
         private Texture _alphaMask;
+
+        private TimeInterval _now;
 
         internal DrawingContext2D(
             ContentManager contentManager,
@@ -40,7 +42,7 @@ namespace OpenSage.Gui
 
             _spriteBatch = AddDisposable(new SpriteBatch(loadContext, blendStateDescription, outputDescription));
 
-            _textCache = AddDisposable(new TextCache(loadContext.GraphicsDevice));
+            TextCache = AddDisposable(new TextCache(loadContext.GraphicsDevice));
 
             _transformStack = new Stack<Matrix3x2>();
             PushTransform(Matrix3x2.Identity);
@@ -52,8 +54,11 @@ namespace OpenSage.Gui
         public void Begin(
             CommandList commandList,
             Sampler samplerState,
-            in SizeF outputSize)
+            in SizeF outputSize,
+            TimeInterval gameTime)
         {
+            _now = gameTime;
+
             _spriteBatch.Begin(
                 commandList,
                 samplerState,
@@ -123,10 +128,40 @@ namespace OpenSage.Gui
         public void DrawMappedImage(
             MappedImage mappedImage,
             in RectangleF destinationRect,
+            in ColorRgbaF sourceColor,
+            bool flipped = false,
+            bool grayscaled = false)
+        {
+            DrawImage(mappedImage.Texture.Value, mappedImage.Coords, destinationRect, sourceColor, flipped, grayscaled);
+        }
+
+
+        public void DrawMappedImage(
+            MappedImage mappedImage,
+            in RectangleF destinationRect,
             bool flipped = false,
             bool grayscaled = false)
         {
             DrawImage(mappedImage.Texture.Value, mappedImage.Coords, destinationRect, flipped, grayscaled);
+        }
+
+        public void DrawImage(
+            Texture texture,
+            in Rectangle? sourceRect,
+            in RectangleF destinationRect,
+            in ColorRgbaF sourceColor,
+            bool flipped = false,
+            bool grayscale = false)
+        {
+            var color = sourceColor.WithA(_currentOpacity);
+
+            _spriteBatch.DrawImage(
+                texture,
+                sourceRect,
+                RectangleF.Transform(destinationRect, _currentTransform),
+                color,
+                flipped,
+                grayscale: grayscale);
         }
 
         public void DrawImage(
@@ -149,11 +184,11 @@ namespace OpenSage.Gui
 
         public static SizeF MeasureText(string text, Font font, TextAlignment textAlignment, float width)
         {
-            var textSize = TextMeasurer.Measure(
+            var textSize = TextMeasurer.MeasureSize(
                 text,
-                new RendererOptions(font)
+                new TextOptions(font)
                 {
-                    WrappingWidth = width,
+                    WrappingLength = width,
                     HorizontalAlignment = textAlignment == TextAlignment.Center
                         ? HorizontalAlignment.Center
                         : HorizontalAlignment.Left,
@@ -180,12 +215,17 @@ namespace OpenSage.Gui
                 return;
             }
 
-            var actualFont = _contentManager.FontManager.GetOrCreateFont(font.Name, font.Size * _currentScale, font.Bold ? FontWeight.Bold : FontWeight.Normal);
+            if (color.A == 0)
+            {
+                return;
+            }
+
+            var actualFont = _contentManager.FontManager.GetOrCreateFont(font.Name, font.Size * _currentScale, font.IsBold ? FontWeight.Bold : FontWeight.Normal);
             var actualRect = RectangleF.Transform(rect, _currentTransform);
 
             var actualColor = GetModifiedColorWithCurrentOpacity(color);
 
-            var texture = _textCache.GetTextTexture(text, actualFont, textAlignment, actualColor, actualRect.Size);
+            var texture = TextCache.GetTextTexture(text, actualFont, textAlignment, actualColor, actualRect.Size, _now);
 
             _spriteBatch.DrawImage(
                 texture,
@@ -294,6 +334,9 @@ namespace OpenSage.Gui
         public void End()
         {
             _spriteBatch.End();
+
+            // TODO: Do not check this every frame
+            TextCache.ClearExpiredEntries(_now);
         }
     }
 

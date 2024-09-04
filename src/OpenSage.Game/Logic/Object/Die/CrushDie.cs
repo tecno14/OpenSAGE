@@ -2,6 +2,22 @@
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class CrushDie : DieModule
+    {
+        public CrushDie(CrushDieModuleData moduleData) : base(moduleData)
+        {
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
+    }
+
     /// <summary>
     /// Allows for the use of the FRONTCRUSHED and BACKCRUSHED condition states.
     /// </summary>
@@ -19,12 +35,17 @@ namespace OpenSage.Logic.Object
                 { "BackEndCrushSoundPercent", (parser, x) => x.BackEndCrushSoundPercent = parser.ParseInteger() },
                 { "FrontEndCrushSoundPercent", (parser, x) => x.FrontEndCrushSoundPercent = parser.ParseInteger() }
             });
-        
+
         public string TotalCrushSound { get; private set; }
         public string BackEndCrushSound { get; private set; }
         public string FrontEndCrushSound { get; private set; }
         public int TotalCrushSoundPercent { get; private set; }
         public int BackEndCrushSoundPercent { get; private set; }
         public int FrontEndCrushSoundPercent { get; private set; }
+
+        internal override CrushDie CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new CrushDie(this);
+        }
     }
 }

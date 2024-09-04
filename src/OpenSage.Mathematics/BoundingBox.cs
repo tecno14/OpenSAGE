@@ -1,171 +1,137 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 
 namespace OpenSage.Mathematics
 {
     public readonly struct BoundingBox : IBoundingVolume
     {
-        public readonly Vector3 Min;
-        public readonly Vector3 Max;
+        private readonly Vector3 _center;
+        private readonly Vector3 _size;
+        private readonly Vector3 _right;
+        private readonly Vector3 _up;
+        private readonly Vector3 _forward;
+        private readonly Matrix4x4 _matrix;
+        private readonly AxisAlignedBoundingBox _aaBox;
 
-        public BoundingBox(in Vector3 min, in Vector3 max)
+        public readonly Vector3[] Vertices;
+
+        public BoundingBox(in RectangleF rect, float height, float z = 0.0f)
         {
-            Min = min;
-            Max = max;
+            _matrix = Matrix4x4.Identity;
+            _size = new Vector3(rect.Width, rect.Height, height);
+            _center = new Vector3(rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f, z + (height / 2.0f));
+            Vertices = new[]
+            {
+                new Vector3(rect.X, rect.Y, z),
+                new Vector3(rect.X + rect.Width, rect.Y, z),
+                new Vector3(rect.X, rect.Y + rect.Height, z),
+                new Vector3(rect.X + rect.Width, rect.Y + rect.Height, z),
+
+                new Vector3(rect.X, rect.Y, z + height),
+                new Vector3(rect.X + rect.Width, rect.Y, z + height),
+                new Vector3(rect.X, rect.Y + rect.Height, z + height),
+                new Vector3(rect.X + rect.Width, rect.Y + rect.Height, z + height),
+            };
+
+            _aaBox = new AxisAlignedBoundingBox(Vertices[0], Vertices[7]);
+            _right = Vector3.UnitX;
+            _up = Vector3.UnitZ;
+            _forward = Vector3.UnitY;
         }
 
-        private static readonly Vector3 MaxVector3 = new Vector3(float.MaxValue);
-        private static readonly Vector3 MinVector3 = new Vector3(float.MinValue);
-
-        public static BoundingBox CreateFromPoints(params Vector3[] points) => CreateFromPoints(points.AsEnumerable());
-
-        public static BoundingBox CreateFromPoints(IEnumerable<Vector3> points)
+        public BoundingBox(in AxisAlignedBoundingBox box, Matrix4x4 matrix) :
+            this(new RectangleF(box.Min.X, box.Min.Y, box.Max.X - box.Min.X, box.Max.Y - box.Min.Y), box.Max.Z - box.Min.Z, box.Min.Z)
         {
-            var empty = true;
-            var minVec = MaxVector3;
-            var maxVec = MinVector3;
-
-            foreach (var ptVector in points)
+            _matrix = matrix;
+            if (Matrix4x4.Decompose(matrix, out var scale, out var rotation, out _))
             {
-                minVec = Vector3.Min(minVec, ptVector);
-                maxVec = Vector3.Max(maxVec, ptVector);
-                empty = false;
+                _size *= scale;
+                _right = Vector3.Transform(_right, rotation);
+                _up = Vector3.Transform(_up, rotation);
+                _forward = Vector3.Transform(_forward, rotation);
             }
-
-            if (empty)
+            _center = Vector3.Transform(_center, matrix);
+            for (var i = 0; i < Vertices.Length; i++)
             {
-                throw new ArgumentException();
+                Vertices[i] = Vector3.Transform(Vertices[i], matrix);
             }
-
-            return new BoundingBox(minVec, maxVec);
         }
 
-        public static BoundingBox CreateMerged(in BoundingBox original, in BoundingBox additional)
+        public bool Intersects(RectangleF bounds) => throw new NotImplementedException();
+
+        public bool Intersects(in BoundingBox box)
         {
-            return new BoundingBox(
-                Vector3.Min(original.Min, additional.Min),
-                Vector3.Max(original.Max, additional.Max));
+            // Based on https://gamedev.stackexchange.com/questions/44500/how-many-and-which-axes-to-use-for-3d-obb-collision-with-sat
+            if (Separated(Vertices, box.Vertices, _right)) return false;
+            if (Separated(Vertices, box.Vertices, _up)) return false;
+            if (Separated(Vertices, box.Vertices, _forward)) return false;
+
+            if (Separated(Vertices, box.Vertices, box._right)) return false;
+            if (Separated(Vertices, box.Vertices, box._up)) return false;
+            if (Separated(Vertices, box.Vertices, box._forward)) return false;
+
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_right, box._right))) return false;
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_right, box._up))) return false;
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_right, box._forward))) return false;
+
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_up, box._right))) return false;
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_up, box._up))) return false;
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_up, box._forward))) return false;
+
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_forward, box._right))) return false;
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_forward, box._up))) return false;
+            if (Separated(Vertices, box.Vertices, Vector3.Cross(_forward, box._forward))) return false;
+
+            return true;
         }
 
-        public static BoundingBox CreateFromSphere(in BoundingSphere sphere)
+        public bool Intersects(BoundingSphere sphere)
         {
-            var corner = new Vector3(sphere.Radius);
-            return new BoundingBox(
-                sphere.Center - corner,
-                sphere.Center + corner);
+            Matrix4x4.Invert(_matrix, out var inverted);
+            var localSpaceSphereCenter = Vector3.Transform(sphere.Center, inverted);
+            return new BoundingSphere(localSpaceSphereCenter, sphere.Radius).Intersects(_aaBox);
         }
 
-        public Vector3 GetCenter()
+        public bool Contains(Vector3 point)
         {
-            return (Min + Max) / 2;
-        }
-
-        public bool Contains(in Vector3 position)
-        {
-            return position.X >= Min.X &&
-                   position.Y >= Min.Y &&
-                   position.Z >= Min.Z &&
-                   position.X <= Max.X &&
-                   position.Y <= Max.Y &&
-                   position.Z <= Max.Z;
-        }
-
-        public PlaneIntersectionType Intersects(in Plane plane)
-        {
-            // See http://zach.in.tu-clausthal.de/teaching/cg_literatur/lighthouse3d_view_frustum_culling/index.html
-
-            Vector3 positiveVertex;
-            Vector3 negativeVertex;
-
-            if (plane.Normal.X >= 0)
-            {
-                positiveVertex.X = Max.X;
-                negativeVertex.X = Min.X;
-            }
-            else
-            {
-                positiveVertex.X = Min.X;
-                negativeVertex.X = Max.X;
-            }
-
-            if (plane.Normal.Y >= 0)
-            {
-                positiveVertex.Y = Max.Y;
-                negativeVertex.Y = Min.Y;
-            }
-            else
-            {
-                positiveVertex.Y = Min.Y;
-                negativeVertex.Y = Max.Y;
-            }
-
-            if (plane.Normal.Z >= 0)
-            {
-                positiveVertex.Z = Max.Z;
-                negativeVertex.Z = Min.Z;
-            }
-            else
-            {
-                positiveVertex.Z = Min.Z;
-                negativeVertex.Z = Max.Z;
-            }
-
-            // Inline Vector3.Dot(plane.Normal, negativeVertex) + plane.D;
-            var planeNormal = plane.Normal;
-            var distance = planeNormal.X * negativeVertex.X + planeNormal.Y * negativeVertex.Y + planeNormal.Z * negativeVertex.Z + plane.D;
-            if (distance > 0)
-            {
-                return PlaneIntersectionType.Front;
-            }
-
-            // Inline Vector3.Dot(plane.Normal, positiveVertex) + plane.D;
-            distance = planeNormal.X * positiveVertex.X + planeNormal.Y * positiveVertex.Y + planeNormal.Z * positiveVertex.Z + plane.D;
-            if (distance < 0)
-            {
-                return PlaneIntersectionType.Back;
-            }
-
-            return PlaneIntersectionType.Intersecting;
-        }
-
-        public bool Intersects(RectangleF bounds)
-        {
-            var position = Min.Vector2XY();
-            var maxPosition = Max.Vector2XY();
-            var width = maxPosition.X - position.X;
-            var height = maxPosition.Y - position.Y;
-            var rect = new RectangleF(position, width, height);
-            return rect.Intersects(bounds);
-        }
-
-        // Based on http://dev.theomader.com/transform-bounding-boxes/
-        public static BoundingBox Transform(in BoundingBox box, in Matrix4x4 matrix)
-        {
-            var right = matrix.Right();
-            var xa = right * box.Min.X;
-            var xb = right * box.Max.X;
-
-            var up = matrix.Up();
-            var ya = up * box.Min.Y;
-            var yb = up * box.Max.Y;
-
-            var backward = matrix.Backward();
-            var za = backward * box.Min.Z;
-            var zb = backward * box.Max.Z;
-
-            var translation = matrix.Translation;
-
-            return new BoundingBox(
-                Vector3.Min(xa, xb) + Vector3.Min(ya, yb) + Vector3.Min(za, zb) + translation,
-                Vector3.Max(xa, xb) + Vector3.Max(ya, yb) + Vector3.Max(za, zb) + translation
-            );
+            Matrix4x4.Invert(_matrix, out var inverted);
+            var localPoint = Vector3.Transform(point, inverted);
+            return _aaBox.Contains(localPoint);
         }
 
         public override string ToString()
         {
-            return $"{nameof(Min)}: {Min}, {nameof(Max)}: {Max}";
+            return $"{nameof(_center)}: {_center}, {nameof(_size)}: {_size}";
+        }
+
+        private static bool Separated(Vector3[] vertsA, Vector3[] vertsB, Vector3 axis)
+        {
+            // Handles the cross product = {0,0,0} case
+            if (axis == Vector3.Zero)
+            {
+                return false;
+            }
+
+            var aMin = float.MaxValue;
+            var aMax = float.MinValue;
+            var bMin = float.MaxValue;
+            var bMax = float.MinValue;
+
+            // Define two intervals, a and b. Calculate their min and max values
+            for (var i = 0; i < 8; i++)
+            {
+                var aDist = Vector3.Dot(vertsA[i], axis);
+                aMin = aDist < aMin ? aDist : aMin;
+                aMax = aDist > aMax ? aDist : aMax;
+                var bDist = Vector3.Dot(vertsB[i], axis);
+                bMin = bDist < bMin ? bDist : bMin;
+                bMax = bDist > bMax ? bDist : bMax;
+            }
+
+            // One-dimensional intersection test between a and b
+            var longSpan = MathF.Max(aMax, bMax) - MathF.Min(aMin, bMin);
+            var sumSpan = aMax - aMin + bMax - bMin;
+            return longSpan >= sumSpan; // > to treat touching as intersection
         }
     }
 }

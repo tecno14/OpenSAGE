@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Numerics;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
@@ -65,7 +64,7 @@ namespace OpenSage.Logic.Object
             {
                 foreach (var position in rank)
                 {
-                    var createdObject = _gameObject.Parent.Add(position.Definition, _gameObject.Owner);
+                    var createdObject = _gameObject.GameContext.GameLogic.CreateObject(position.Definition, _gameObject.Owner);
                     createdObject.ParentHorde = _gameObject;
                     position.Object = createdObject;
                     _payload.Add(createdObject);
@@ -103,7 +102,8 @@ namespace OpenSage.Logic.Object
                         continue;
                     }
 
-                    if (position.Definition.Name == obj.Definition.Name)
+                    if (position.Definition == obj.Definition
+                        || position.Definition.ObjectIsMemberOfBuildVariations(obj.Definition))
                     {
                         position.Object = obj;
                         _payload.Add(obj);
@@ -138,16 +138,15 @@ namespace OpenSage.Logic.Object
             return Vector3.Zero;
         }
 
-        public void EnqueuePayload(ProductionUpdate productionUpdate, int delay)
+        public void EnqueuePayload(ProductionUpdate productionUpdate, LogicFrameSpan delay)
         {
-            var delay_s = delay / 1000.0f;
             _productionUpdate = productionUpdate;
 
             foreach (var rank in _formation.Values)
             {
                 foreach (var position in rank)
                 {
-                    _productionUpdate.SpawnPayload(position.Definition, delay_s);
+                    _productionUpdate.SpawnPayload(position.Definition, delay);
                     _pendingRegistrations++;
                 }
             }
@@ -170,7 +169,7 @@ namespace OpenSage.Logic.Object
             { "InitialPayload", (parser, x) => x.InitialPayloads.Add(Payload.Parse(parser)) },
             { "Slots", (parser, x) => x.Slots = parser.ParseInteger() },
             { "PassengerFilter", (parser, x) => x.PassengerFilter = ObjectFilter.Parse(parser) },
-            { "ShowPips", (parser, x) => x.ShowPips = parser.ParseBoolean() }, 
+            { "ShowPips", (parser, x) => x.ShowPips = parser.ParseBoolean() },
             { "ThisFormationIsTheMainFormation", (parser, x) => x.ThisFormationIsTheMainFormation = parser.ParseBoolean() },
             { "RandomOffset", (parser, x ) => x.RandomOffset = parser.ParsePoint() },
 
@@ -311,7 +310,6 @@ namespace OpenSage.Logic.Object
         public bool Initialized { get; set; } = false;
     }
 
-    [AddedIn(SageGame.Bfme)]
     public sealed class Payload
     {
         internal static Payload Parse(IniParser parser)

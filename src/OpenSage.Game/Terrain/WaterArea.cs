@@ -5,6 +5,7 @@ using OpenSage.Data.Map;
 using OpenSage.Graphics.Rendering;
 using OpenSage.Graphics.Shaders;
 using OpenSage.Mathematics;
+using OpenSage.Rendering;
 using OpenSage.Utilities;
 using OpenSage.Utilities.Extensions;
 using Veldrid;
@@ -16,13 +17,15 @@ namespace OpenSage.Terrain
         private readonly string _debugName;
 
         private DeviceBuffer _vertexBuffer;
-        private BoundingBox _boundingBox;
+        private AxisAlignedBoundingBox _boundingBox;
 
         private DeviceBuffer _indexBuffer;
         private uint _numIndices;
 
         private readonly ShaderSet _shaderSet;
         private readonly Pipeline _pipeline;
+
+        private readonly Material _material;
 
         private readonly BeforeRenderDelegate _beforeRender;
         private Matrix4x4 _world;
@@ -92,7 +95,7 @@ namespace OpenSage.Terrain
                     })
                 .ToArray();
 
-            _boundingBox = BoundingBox.CreateFromPoints(vertices.Select(x => x.Position));
+            _boundingBox = AxisAlignedBoundingBox.CreateFromPoints(vertices.Select(x => x.Position));
 
             _vertexBuffer = AddDisposable(loadContext.GraphicsDevice.CreateStaticBuffer(
                 vertices,
@@ -106,17 +109,23 @@ namespace OpenSage.Terrain
 
             _world = Matrix4x4.Identity;
             _world.Translation = new Vector3(0, height, 0);
-
         }
 
         private WaterArea(AssetLoadContext loadContext, string debugName)
         {
-            _shaderSet = loadContext.ShaderResources.Water.ShaderSet;
+            _shaderSet = loadContext.ShaderResources.Water;
             _pipeline = loadContext.ShaderResources.Water.Pipeline;
+
+            _material = AddDisposable(
+                new Material(
+                    _shaderSet,
+                    _pipeline,
+                    null,
+                    SurfaceType.Transparent)); // TODO: MaterialResourceSet
 
             _debugName = debugName;
 
-            _beforeRender = (cl, context) =>
+            _beforeRender = (CommandList cl, in RenderItem renderItem) =>
             {
                 cl.SetVertexBuffer(0, _vertexBuffer);
             };
@@ -154,8 +163,7 @@ namespace OpenSage.Terrain
         {
             renderList.Water.RenderItems.Add(new RenderItem(
                 _debugName,
-                _shaderSet,
-                _pipeline,
+                _material,
                 _boundingBox,
                 _world,
                 0,

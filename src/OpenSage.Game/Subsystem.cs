@@ -27,6 +27,16 @@
         Locomotors,
 
         /// <summary>
+        /// Things that need to be loaded in order to handle sciences.
+        /// </summary>
+        Sciences,
+
+        /// <summary>
+        /// Things that need to be loaded in order to get shot by things.
+        /// </summary>
+        Armor,
+
+        /// <summary>
         /// Things that need to be loaded in order to shoot things.
         /// </summary>
         Weapons,
@@ -85,5 +95,25 @@
         /// Things that need to be loaded in order for the IngameUI to work.
         /// </summary>
         InGameUI,
+
+        /// <summary>
+        /// Definitions of the various levels of an object.
+        /// </summary>
+        ExperienceLevels,
+
+        /// <summary>
+        /// Defines modifications to object properties like health, armor etc.
+        /// </summary>
+        AttributeModifiers,
+
+        /// <summary>
+        /// Defines ranks of a player.
+        /// </summary>
+        Rank,
+
+        /// <summary>
+        /// Defines 2D animations.
+        /// </summary>
+        Animation2D,
     }
 }

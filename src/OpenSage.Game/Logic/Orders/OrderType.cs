@@ -2,23 +2,55 @@
 {
     public enum OrderType
     {
-        Unknown27 = 27, // Something to do with end of game
-        SetSelection = 1001,
+        EndGame = 27,
+
+        // Selection
+        SetSelection = 1001, // Boolean:True, ObjectId:658 // first parameter is whether to clear existing selection (false in case of shift+click)
+        SelectAcrossScreen = 1002, // Boolean:false, ObjectId:671, ... (more ids if more objects are selected) // occurs when selecting a unit and then pressing 'e'
         ClearSelection = 1003,
-        SpecialPower = 1040,
-        SpecialPowerAtLocation = 1041,
-        SpecialPowerAtObject = 1042,
+        Deselect = 1004, // ObjectId: 5 // occurs when shift-clicking a unit that is currently selected
+
+        // Group management
+        CreateGroup0 = 1006,
+        CreateGroup1 = 1007,
+        CreateGroup2 = 1008,
+        CreateGroup3 = 1009,
+        CreateGroup4 = 1010,
+        CreateGroup5 = 1011,
+        CreateGroup6 = 1012,
+        CreateGroup7 = 1013,
+        CreateGroup8 = 1014,
+        CreateGroup9 = 1015,
+        SelectGroup0 = 1016,
+        SelectGroup1 = 1017,
+        SelectGroup2 = 1018,
+        SelectGroup3 = 1019,
+        SelectGroup4 = 1020,
+        SelectGroup5 = 1021,
+        SelectGroup6 = 1022,
+        SelectGroup7 = 1023,
+        SelectGroup8 = 1024,
+        SelectGroup9 = 1025,
+
+        SpecialPower = 1040, // Integer:25, Integer:256, ObjectId:0 // SpecialPowerType, SpecialPowerOrderFlags, source command center?
+        SpecialPowerAtLocation = 1041, // Integer:35, Position:<1105.9589, 728.7699, 18.75>, ObjectId:2816, Integer:672, ObjectId:657 // SpecialPowerType, location, unknown, SpecialPowerOrderFlags, source command center?
+        SpecialPowerAtObject = 1042, // Integer:14, ObjectId:674, Integer:643, ObjectId:657 // SpecialPowerType, target object, SpecialPowerOrderFlags, source command center?
         SetRallyPoint = 1043,
+        PurchaseScience = 1044,
         BeginUpgrade = 1045, //encountered while adding landmines to power plant: ObjectId:671,Integer:1604 (mines is Upgrades[13]), also when upgrading usa power plant (ObjectId:673,Integer:1593), (ObjectId:671,Integer:1593), also for flashbangs in the barracks (ObjectId:678,Integer:1594)
         CancelUpgrade = 1046,
         CreateUnit = 1047,
         CancelUnit = 1048,
         BuildObject = 1049,
+        CancelBuild = 1051,
         Sell = 1052,
+        ExitContainer = 1053, // ObjectId:683 the objectid to remove from the container
+        Evacuate = 1054,
         DrawBoxSelection = 1058,
         AttackObject = 1059,
         ForceAttackObject = 1060,
         ForceAttackGround = 1061,
+        ResumeBuild = 1065,
         MoveTo = 1068,
         ToggleOvercharge = 1078,
         SetCameraPosition = 1092,
@@ -39,30 +71,7 @@
 
 
 
-        Unknown1002 = 1002,
-
-        Unknown1004 = 1004,
         Unknown1005 = 1005,
-        Unknown1006 = 1006,
-        Unknown1007 = 1007,
-        Unknown1008 = 1008,
-        Unknown1009 = 1009,
-        Unknown1010 = 1010, //something to do with an object
-        Unknown1011 = 1011,
-        Unknown1012 = 1012,
-        Unknown1013 = 1013,
-        Unknown1014 = 1014,
-        Unknown1015 = 1015,
-        Unknown1016 = 1016,
-        Unknown1017 = 1017,
-        Unknown1018 = 1018,
-        Unknown1019 = 1019,
-        Unknown1020 = 1020,
-        Unknown1021 = 1021,
-        Unknown1022 = 1022,
-        Unknown1023 = 1023,
-        Unknown1024 = 1024,
-        Unknown1025 = 1025,
         Unknown1026 = 1026,
         Unknown1027 = 1027,
         Unknown1028 = 1028,
@@ -75,50 +84,41 @@
         Unknown1035 = 1035,
         Unknown1036 = 1036,
         Unknown1037 = 1037,
-        Unknown1038 = 1038,
-        Unknown1039 = 1039,
-        Unknown1040 = 1040,
-        Unknown1041 = 1041, //encountered when spawning usa spydrone (Integer:16,Position:<1055.208, 466.9498, 18.75>,ObjectId:0,Integer:928,ObjectId:657),
-                            //again with  (Integer:16,Position:<1762,799. 3837,869. 100>,ObjectId:0,Integer:928,ObjectId:0)
-
-        Unknown1042 = 1042,
-
-        ChooseGeneralPromotion = 1044, //something with general promotion? gla first promotion -> arg 34, gla second promotion -> arg 35, gla third promotion -> arg 36
-
+        // dozer clear mines     Integer:0, Position:<1154.5593, 505.26968, 18.75003>, Integer:2147483647, ObjectId:0 // primary weapon is clear mines
+        // dragon tank fire wall Integer:1, Position:<530.40765, 607.319, 9.9999695>, Integer:2147483647, ObjectId:0  // secondary weapon is fire wall
+        // comanche rocket pods  Integer:2, Position:<373.81445, 256.29944, 10>, Integer:2147483647, ObjectId:0       // tertiary weapon is rocket pods
+        UseWeapon = 1038,
+        SnipeVehicle = 1039, // Integer:1, ObjectId:6, Integer:2147483647 // first integer argument could be because sniper is secondary weapon (similar to useweapon above)
         Unknown1050 = 1050,
-        Unknown1051 = 1051,
 
-        Unknown1053 = 1053,
-        Unknown1054 = 1054,
         Unknown1055 = 1055,
         Unknown1056 = 1056,
-        Unknown1057 = 1057,
+        CombatDrop = 1057, // ObjectId:2 (target building) // used by USA Chinook
 
-        Unknown1062 = 1062,
+        RepairVehicle = 1062, // ObjectId:3 includes vehicles returning to war factory for repair and helicopters landing and airfields for repair
         Unknown1063 = 1063,
-        Unknown1064 = 1064,
-        Unknown1065 = 1065,
-        Unknown1066 = 1066,
-        Unknown1067 = 1067,
+        RepairStructure = 1064, // ObjectId:4 when a dozer is ordered to repair a structure
+        Enter = 1066, // used for entering friendly vehicles and for hijacking vehicles
+        GatherDumpSupplies = 1067, // used for both gathering from a supply source and dumping supplies
 
-        Unknown1069 = 1069,//AttackMove?
+        AttackMove = 1069, // Position:<1343.561, 378.53568, 18.75>
         Unknown1070 = 1070,
-        Unknown1071 = 1071,
-        Unknown1072 = 1072,
+        AddWaypoint = 1071, // Position:<1147.202, 214.9476, 18.75>
+        GuardMode = 1072, // Position:<1256.29822, 505.26968, 18.75>, Integer:0 // integer 0 is guard ground, 2 is guard air
         Unknown1073 = 1073,
         StopMoving = 1074,
-        Unknown1075 = 1075,
-        Unknown1076 = 1076,
-        Unknown1077 = 1077,
+        Scatter = 1075, // no arguments
+        HackInternet = 1076, // no arguments
+        Cheer = 1077, // no arguments
 
-        Unknown1079 = 1079,
+        SelectWeapon = 1079, // Integer:1 // e.g. USA Ranger, 1 for flashbang 0 for machine gun
         Unknown1080 = 1080,
         Unknown1081 = 1081,
         Unknown1082 = 1082,
         Unknown1083 = 1083,
         Unknown1084 = 1084,
         Unknown1085 = 1085,
-        Unknown1086 = 1086,
+        DirectParticleCannon = 1086, // Position:<490.00174, 279.01785, 10>, Integer:0, ObjectId:0 // occurs when moving a particle cannon while it is being fired
         Unknown1087 = 1087, //same as 1068
         Unknown1088 = 1088,
         Unknown1089 = 1089, //place beacon? (Position:<1627,444. 386,3608. 20>)
@@ -126,9 +126,9 @@
         Unknown1091 = 1091,
 
         Unknown1093 = 1093,
-        Unknown1094 = 1094,
+        ToggleFormationMode = 1094, // no arguments
 
-        Unknown1096 = 1096,
+        SelectClearMines = 1096, // no arguments
 
         Unknown1098 = 1098,
         Unknown1099 = 1099,

@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using OpenSage.Utilities;
 using OpenSage.Utilities.Extensions;
+using OpenSage.IO;
 
 namespace OpenSage.Data
 {
@@ -48,13 +49,18 @@ namespace OpenSage.Data
 
         public FileSystem CreateFileSystem()
         {
-            FileSystem nextFileSystem = null;
+            var result = new CompositeFileSystem(
+                new DiskFileSystem(Path),
+                new BigFileSystem(Path));
+
             if (_baseGameInstallation != null)
             {
-                nextFileSystem = new FileSystem(_baseGameInstallation.Path);
+                result = new CompositeFileSystem(
+                    result,
+                    new BigFileSystem(_baseGameInstallation.Path));
             }
 
-            return new FileSystem(Path, nextFileSystem);
+            return result;
         }
     }
 
@@ -79,7 +85,7 @@ namespace OpenSage.Data
                 return new GameInstallation[]{};
             }
 
-            var installations = new GameInstallation[]{new GameInstallation(game, path)};
+            var installations = new GameInstallation[]{new GameInstallation(game, path, game.BaseGame != null ? FindInstallations(game.BaseGame).First() : null )};
 
             return installations;
         }
@@ -130,12 +136,12 @@ namespace OpenSage.Data
     {
         public static IEnumerable<IInstallationLocator> GetAllForPlatform()
         {
+            yield return new EnvironmentInstallationLocator();
+
             if (Environment.OSVersion.Platform == PlatformID.Win32NT)
             {
                 yield return new RegistryInstallationLocator();
             }
-
-            yield return new EnvironmentInstallationLocator();
         }
 
         public static IEnumerable<GameInstallation> FindAllInstallations(IGameDefinition game)

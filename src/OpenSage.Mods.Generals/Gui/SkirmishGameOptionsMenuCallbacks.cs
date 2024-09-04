@@ -1,9 +1,5 @@
-﻿using System;
-using System.Linq;
-using OpenSage.Gui.Wnd;
+﻿using OpenSage.Gui.Wnd;
 using OpenSage.Gui.Wnd.Controls;
-using OpenSage.Mathematics;
-using OpenSage.Network;
 
 namespace OpenSage.Mods.Generals.Gui
 {
@@ -12,13 +8,11 @@ namespace OpenSage.Mods.Generals.Gui
     {
         public static GameOptionsUtil GameOptions { get; private set; }
 
-        private static Game _game;
-
         private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
 
-        public static void SkirmishGameOptionsMenuSystem(Control control, WndWindowMessage message, ControlCallbackContext context)
+        public static async void SkirmishGameOptionsMenuSystem(Control control, WndWindowMessage message, ControlCallbackContext context)
         {
-            if (!GameOptions.HandleSystem(control, message, context))
+            if (!await GameOptions.HandleSystemAsync(control, message, context))
             {
                 switch (message.MessageType)
                 {
@@ -26,8 +20,8 @@ namespace OpenSage.Mods.Generals.Gui
                         switch (message.Element.Name)
                         {
                             case "SkirmishGameOptionsMenu.wnd:ButtonBack":
+                                context.Game.SkirmishManager.Stop();
                                 context.WindowManager.SetWindow(@"Menus\MainMenu.wnd");
-                                _game.SkirmishManager.Quit();
                                 // TODO: Go back to Single Player sub-menu
                                 break;
                         }
@@ -38,12 +32,12 @@ namespace OpenSage.Mods.Generals.Gui
 
         public static void SkirmishGameOptionsMenuInit(Window window, Game game)
         {
-
-
-
             GameOptions = new GameOptionsUtil(window, game, "Skirmish");
+        }
 
-            _game = game;
+        public static void SkirmishGameOptionsMenuUpdate(Window window, Game game)
+        {
+            GameOptions.UpdateUI(window);
         }
     }
 }

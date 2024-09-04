@@ -1,12 +1,27 @@
 ﻿using System;
 using System.Collections.Generic;
+using OpenSage.Client;
 using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
-    public abstract class ClientUpdateModuleData : BehaviorModuleData
+    public abstract class ClientUpdateModule : ModuleBase
     {
-        internal static ClientUpdateModuleData ParseClientUpdate(IniParser parser) => ParseModule(parser, ClientUpdateParseTable);
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
+    }
+
+    public abstract class ClientUpdateModuleData : ModuleData
+    {
+        public override ModuleKinds ModuleKinds => ModuleKinds.ClientUpdate;
+
+        internal static ModuleDataContainer ParseClientUpdate(IniParser parser, ModuleInheritanceMode inheritanceMode) => ParseModule(parser, ClientUpdateParseTable, inheritanceMode);
 
         private static readonly Dictionary<string, Func<IniParser, ClientUpdateModuleData>> ClientUpdateParseTable = new Dictionary<string, Func<IniParser, ClientUpdateModuleData>>
         {
@@ -17,5 +32,7 @@ namespace OpenSage.Logic.Object
             { "RadarMarkerClientUpdate", RadarMarkerClientUpdateModuleData.Parse },
             { "SwayClientUpdate", SwayClientUpdateModuleData.Parse },
         };
+
+        internal virtual ClientUpdateModule CreateModule(Drawable drawable, GameContext context) => null; // TODO: Make this abstract.
     }
 }

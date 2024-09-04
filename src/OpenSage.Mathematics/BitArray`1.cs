@@ -12,6 +12,8 @@ namespace OpenSage.Mathematics
         public bool AnyBitSet => _data.AnyBitSet;
         public int NumBitsSet => _data.NumBitsSet;
 
+        public bool BitsChanged { get; set; } = true;
+
         public BitArray()
         {
             var maxBits = GetNumValues();
@@ -20,6 +22,18 @@ namespace OpenSage.Mathematics
                 throw new Exception($"Cannot create a BitArray for enum {typeof(TEnum).Name}, because it has {maxBits} cases (max 512).");
             }
             _data = new BitArray512(maxBits);
+        }
+
+        /// <summary>
+        /// Constructs a new bit array with the provided values set to true.
+        /// </summary>
+        /// <param name="values"></param>
+        public BitArray(params TEnum[] values): this()
+        {
+            foreach (var value in values)
+            {
+                Set(value, true);
+            }
         }
 
         public BitArray(System.Collections.BitArray bitArray)
@@ -46,6 +60,11 @@ namespace OpenSage.Mathematics
             }
         }
 
+        public BitArray(in BitArray512 bitArray)
+        {
+            _data = bitArray;
+        }
+
         public bool Get(int bit)
         {
             return _data.Get(bit);
@@ -55,11 +74,12 @@ namespace OpenSage.Mathematics
         {
             // This avoids an object allocation.
             var bitI = Unsafe.As<TEnum, int>(ref bit);
-            return _data.Get(bitI);
+            return Get(bitI);
         }
 
         public void Set(int bit, bool value)
         {
+            BitsChanged |= _data.Get(bit) != value;
             _data.Set(bit, value);
         }
 
@@ -67,17 +87,19 @@ namespace OpenSage.Mathematics
         {
             // This avoids an object allocation.
             var bitI = Unsafe.As<TEnum, int>(ref bit);
-            _data.Set(bitI, value);
+            Set(bitI, value);
         }
 
         public void SetAll(bool value)
         {
             _data.SetAll(value);
+            BitsChanged = true;
         }
 
         public void CopyFrom(BitArray<TEnum> other)
         {
             _data.CopyFrom(other._data);
+            BitsChanged = true;
         }
 
         public int CountIntersectionBits(BitArray<TEnum> other)
@@ -101,6 +123,16 @@ namespace OpenSage.Mathematics
             }
         }
 
+        public static BitArray<TEnum> operator |(BitArray<TEnum> left, BitArray<TEnum> right)
+        {
+            return new BitArray<TEnum>(left._data.Or(right._data));
+        }
+
+        public static BitArray<TEnum> operator &(BitArray<TEnum> left, BitArray<TEnum> right)
+        {
+            return new BitArray<TEnum>(left._data.And(right._data));
+        }
+
         public string DisplayName
         {
             get
@@ -118,10 +150,7 @@ namespace OpenSage.Mathematics
             }
         }
 
-        public bool Equals(BitArray<TEnum> other)
-        {
-            return _data.Equals(other);
-        }
+        public bool Equals(BitArray<TEnum>? other) => _data.Equals(other?._data);
 
         public override int GetHashCode()
         {

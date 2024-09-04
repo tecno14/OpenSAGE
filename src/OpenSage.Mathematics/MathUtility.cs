@@ -5,9 +5,10 @@ namespace OpenSage.Mathematics
 {
     public static class MathUtility
     {
-        public static readonly float PiOver4 = MathF.PI / 4.0f;
-        public static readonly float PiOver2 = MathF.PI / 2.0f;
-        public static readonly float TwoPi = MathF.PI * 2.0f;
+        public const float PiOver4 = MathF.PI / 4.0f;
+        public const float PiOver2 = MathF.PI / 2.0f;
+        public const float TwoPi = MathF.PI * 2.0f;
+        public const float DegreesToRadiansRatio = MathF.PI / 180;
 
         public static int FloorToInt(float f) => (int) MathF.Floor(f);
 
@@ -67,6 +68,17 @@ namespace OpenSage.Mathematics
             value++;
 
             return value;
+        }
+
+        public static uint GetClosestDivisible(uint value, uint divisor)
+        {
+            var remainder = value % divisor;
+            if(remainder >= divisor / 2)
+            {
+                return value + (divisor - remainder);
+            }
+
+            return value - remainder;
         }
     }
 }

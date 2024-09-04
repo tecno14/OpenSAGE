@@ -4,8 +4,10 @@ using OpenSage.Data;
 using OpenSage.Gui;
 using OpenSage.Gui.Apt;
 using OpenSage.Gui.ControlBar;
-using OpenSage.Gui.UnitOverlay;
+using OpenSage.Gui.CommandListOverlay;
 using OpenSage.Mods.Bfme.Gui;
+using OpenSage.Mods.Bfme;
+using System.IO;
 
 namespace OpenSage.Mods.Bfme2
 {
@@ -13,7 +15,7 @@ namespace OpenSage.Mods.Bfme2
     {
         public SageGame Game => SageGame.Bfme2;
         public string DisplayName => "The Lord of the Rings (tm): The Battle for Middle-earth (tm) II";
-        public IGameDefinition BaseGame => null;
+        public IGameDefinition? BaseGame => null;
 
         public bool LauncherImagePrefixLang => true;
         public string LauncherImagePath => "Splash.jpg";
@@ -32,14 +34,20 @@ namespace OpenSage.Mods.Bfme2
 
         public IMainMenuSource MainMenu { get; } = new AptMainMenuSource("MainMenu.apt");
         public IControlBarSource ControlBar { get; } = new AptControlBarSource();
-        public IUnitOverlaySource UnitOverlay { get; } = new RadialUnitOverlaySource();
+        public ICommandListOverlaySource CommandListOverlay { get; } = new RadialUnitOverlaySource();
 
         public uint ScriptingTicksPerSecond => 5;
+
+        public string GetLocalizedStringsPath(string language) => language == "German"
+            ? "lotr"
+            : Path.Combine("data", "lotr");
 
         public OnDemandAssetLoadStrategy CreateAssetLoadStrategy()
         {
             return new OnDemandAssetLoadStrategy(PathResolvers.Bfme2W3d, PathResolvers.Bfme2Texture);
         }
+
+        public Scene25D CreateScene25D(Scene3D scene3D, AssetStore assetStore) => new(scene3D, assetStore);
 
         public static Bfme2Definition Instance { get; } = new Bfme2Definition();
 

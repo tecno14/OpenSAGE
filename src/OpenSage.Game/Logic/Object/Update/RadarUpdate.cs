@@ -2,6 +2,26 @@
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class RadarUpdate : UpdateModule
+    {
+        private uint _radarExtendEndFrame;
+        private bool _isRadarExtending;
+        private bool _isRadarExtended;
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistUInt32(ref _radarExtendEndFrame);
+            reader.PersistBoolean(ref _isRadarExtended);
+            reader.PersistBoolean(ref _isRadarExtending);
+        }
+    }
+
     public sealed class RadarUpdateModuleData : UpdateModuleData
     {
         internal static RadarUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
@@ -12,5 +32,10 @@ namespace OpenSage.Logic.Object
         };
         
         public int RadarExtendTime { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new RadarUpdate();
+        }
     }
 }

@@ -2,7 +2,7 @@
 {
     public class SkirmishClientConnectPacket
     {
+        public string ClientId { get; set; }
         public string PlayerName { get; set; }
-        public int ProcessId { get; set; }
     }
 }

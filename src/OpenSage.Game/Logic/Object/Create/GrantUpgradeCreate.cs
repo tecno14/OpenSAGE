@@ -2,6 +2,18 @@
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class GrantUpgradeCreate : CreateModule
+    {
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
+    }
+
     public sealed class GrantUpgradeCreateModuleData : CreateModuleData
     {
         internal static GrantUpgradeCreateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
@@ -18,5 +30,10 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.Bfme2)]
         public bool GiveOnBuildComplete { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new GrantUpgradeCreate();
+        }
     }
 }

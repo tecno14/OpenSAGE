@@ -1,10 +1,10 @@
 ﻿using System;
 using System.Text;
 using OpenSage.Content.Translation;
-using OpenSage.Data;
 using OpenSage.Data.Ini;
 using OpenSage.Diagnostics;
-using OpenSage.Gui.Wnd.Images;
+using OpenSage.IO;
+using OpenSage.Logic.Object;
 using OpenSage.Utilities;
 using Veldrid;
 
@@ -14,14 +14,14 @@ namespace OpenSage.Content
     {
         private readonly Game _game;
 
-        public ISubsystemLoader SubsystemLoader { get; }
+        public SubsystemLoader SubsystemLoader { get; }
 
         public GraphicsDevice GraphicsDevice { get; }
 
         public SageGame SageGame { get; }
 
         public FileSystem FileSystem { get; }
-        public FileSystem UserDataFileSystem { get; internal set; }
+        public DiskFileSystem UserDataFileSystem { get; internal set; }
 
         public IniDataContext IniDataContext { get; }
 
@@ -49,15 +49,15 @@ namespace OpenSage.Content
 
                 SageGame = sageGame;
 
-                Language = LanguageUtility.ReadCurrentLanguage(game.Definition, fileSystem.RootDirectory);
+                Language = LanguageUtility.ReadCurrentLanguage(game.Definition, fileSystem);
 
                 TranslationManager = Translation.TranslationManager.Instance;
-                Translation.TranslationManager.LoadGameStrings(fileSystem, Language, sageGame);
+                Translation.TranslationManager.LoadGameStrings(fileSystem, Language, game.Definition);
                 LocaleSpecificEncoding = Encoding.GetEncoding(TranslationManager.CurrentLanguage.TextInfo.ANSICodePage);
 
                 void OnLanguageChanged(object sender, EventArgs e)
                 {
-                    throw new NotImplementedException("Encoding change on LanguageChanged not implemented yet");
+                    //throw new NotImplementedException("Encoding change on LanguageChanged not implemented yet");
                 }
 
                 TranslationManager.LanguageChanged += OnLanguageChanged;
@@ -65,54 +65,44 @@ namespace OpenSage.Content
 
                 IniDataContext = new IniDataContext();
 
-                SubsystemLoader = Content.SubsystemLoader.Create(game.Definition, FileSystem, game, this);
+                SubsystemLoader = new SubsystemLoader(game.Definition, FileSystem, game, this);
+
+                SubsystemLoader.Load(Subsystem.Core);
+                SubsystemLoader.Load(Subsystem.Audio);
+                SubsystemLoader.Load(Subsystem.Players);
+                SubsystemLoader.Load(Subsystem.ParticleSystems);
+                SubsystemLoader.Load(Subsystem.ObjectCreation);
+                SubsystemLoader.Load(Subsystem.Locomotors);
+                SubsystemLoader.Load(Subsystem.Sciences);
+                SubsystemLoader.Load(Subsystem.Armor);
+                SubsystemLoader.Load(Subsystem.Weapons);
+                SubsystemLoader.Load(Subsystem.FXList);
+                SubsystemLoader.Load(Subsystem.Multiplayer);
+                SubsystemLoader.Load(Subsystem.LinearCampaign);
+                SubsystemLoader.Load(Subsystem.Wnd);
+                SubsystemLoader.Load(Subsystem.Terrain);
+                SubsystemLoader.Load(Subsystem.Credits);
+                SubsystemLoader.Load(Subsystem.Damage);
+                SubsystemLoader.Load(Subsystem.SpecialPower);
+                SubsystemLoader.Load(Subsystem.InGameUI);
+                SubsystemLoader.Load(Subsystem.Rank);
+                SubsystemLoader.Load(Subsystem.Animation2D);
 
                 switch (sageGame)
                 {
                     // Only load these INI files for a subset of games, because we can't parse them for others yet.
-                    case SageGame.CncGenerals:
-                    case SageGame.CncGeneralsZeroHour:
+                    // TODO: Defer subsystem loading until necessary
                     case SageGame.Bfme:
                     case SageGame.Bfme2:
                     case SageGame.Bfme2Rotwk:
-                        SubsystemLoader.Load(Subsystem.Core);
-
-                        // TODO: Defer subsystem loading until necessary
-                        SubsystemLoader.Load(Subsystem.Audio);
-                        SubsystemLoader.Load(Subsystem.Players);
-                        SubsystemLoader.Load(Subsystem.ParticleSystems);
-                        SubsystemLoader.Load(Subsystem.ObjectCreation);
-                        SubsystemLoader.Load(Subsystem.Locomotors);
-                        SubsystemLoader.Load(Subsystem.Weapons);
-                        SubsystemLoader.Load(Subsystem.FXList);
-                        SubsystemLoader.Load(Subsystem.Multiplayer);
-                        SubsystemLoader.Load(Subsystem.LinearCampaign);
-                        SubsystemLoader.Load(Subsystem.Wnd);
-                        SubsystemLoader.Load(Subsystem.Terrain);
-                        SubsystemLoader.Load(Subsystem.Credits);
-                        SubsystemLoader.Load(Subsystem.Damage);
-                        SubsystemLoader.Load(Subsystem.SpecialPower);
-                        SubsystemLoader.Load(Subsystem.InGameUI);
-                        break;
-
-                    case SageGame.Cnc3:
-                        SubsystemLoader.Load(Subsystem.Core);
-                        break;
-
-                    default:
+                        SubsystemLoader.Load(Subsystem.ExperienceLevels);
+                        SubsystemLoader.Load(Subsystem.AttributeModifiers);
                         break;
                 }
 
-                FontManager = new FontManager(Language, StringComparer.Create(TranslationManager.CurrentLanguage, true));
-            }
-        }
+                UpgradeManager.Initialize(_game.AssetStore);
 
-        // TODO: Move these methods to somewhere else (SubsystemLoader?)
-        internal void LoadIniFiles(string folder)
-        {
-            foreach (var iniFile in FileSystem.GetFiles(folder))
-            {
-                LoadIniFile(iniFile);
+                FontManager = new FontManager(Language, StringComparer.Create(TranslationManager.CurrentLanguage, true));
             }
         }
 
@@ -125,11 +115,6 @@ namespace OpenSage.Content
         {
             using (GameTrace.TraceDurationEvent($"LoadIniFile('{entry.FilePath}'"))
             {
-                if (!entry.FilePath.ToLowerInvariant().EndsWith(".ini"))
-                {
-                    return;
-                }
-
                 var parser = new IniParser(entry, _game.AssetStore, _game.SageGame, IniDataContext, LocaleSpecificEncoding);
                 parser.ParseFile();
             }
@@ -137,16 +122,16 @@ namespace OpenSage.Content
 
         internal FileSystemEntry GetMapEntry(string mapPath)
         {
-            var normalizedPath = FileSystem.NormalizeFilePath(mapPath);
-            if (UserDataFileSystem != null && normalizedPath.StartsWith(UserDataFileSystem.RootDirectory))
+            if (UserDataFileSystem is not null)
             {
-                mapPath = mapPath.Substring(UserDataFileSystem.RootDirectory.Length + 1);
-                return UserDataFileSystem.GetFile(mapPath);
+                var mapEntry = UserDataFileSystem.GetFile(mapPath);
+                if (mapEntry is not null)
+                {
+                    return mapEntry;
+                }
             }
-            else
-            {
-                return FileSystem.GetFile(mapPath);
-            }
+
+            return FileSystem.GetFile(mapPath);
         }
 
         internal FileSystemEntry GetScriptEntry(string scriptPath) => FileSystem.GetFile(scriptPath);

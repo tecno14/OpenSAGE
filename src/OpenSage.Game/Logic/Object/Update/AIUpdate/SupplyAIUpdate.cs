@@ -1,10 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Numerics;
+﻿using System.Numerics;
+using OpenSage.Audio;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
-using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
@@ -33,10 +30,13 @@ namespace OpenSage.Logic.Object
 
         private SupplyAIUpdateModuleData _moduleData;
 
-        protected GameObject _currentSupplySource;
+        public GameObject CurrentSupplySource { get; set; }
         private SupplyWarehouseDockUpdate _currentSourceDockUpdate;
-        protected TimeSpan _waitUntil;
+        protected LogicFrame _waitUntil;
         protected int _numBoxes;
+        public bool CarryingSupplies => _numBoxes > 0;
+
+        public int SupplyWarehouseScanDistance => _moduleData.SupplyWarehouseScanDistance;
 
         protected virtual int GetAdditionalValuePerSupplyBox(ScopedAssetCollection<UpgradeTemplate> upgrades) => 0;
 
@@ -44,6 +44,7 @@ namespace OpenSage.Logic.Object
         {
             _moduleData = moduleData;
             SupplyGatherState = SupplyGatherStates.Default;
+            // todo: this is not always the case - workers produced from a command center do not go looking for supplies
             SupplyGatherStateToResume = SupplyGatherStates.SearchingForSupplySource;
             _numBoxes = 0;
         }
@@ -56,48 +57,13 @@ namespace OpenSage.Logic.Object
             base.SetTargetPoint(targetPoint);
         }
 
-        internal virtual List<GameObject> GetNearbySupplySources(BehaviorUpdateContext context)
-        {
-            var nearbyObjects = context.GameContext.Scene3D.Quadtree.FindNearby(GameObject, GameObject.Transform, _moduleData.SupplyWarehouseScanDistance);
-            // TODO: also use KindOf SUPPLY_SOURCE_ON_PREVIEW ?
-            return nearbyObjects.Where(x => x.Definition.KindOf.Get(ObjectKinds.SupplySource)).ToList();
-        }
-
         internal virtual void ClearConditionFlags()
         {
             GameObject.ModelConditionFlags.Set(ModelConditionFlag.Docking, false);
         }
 
-        internal virtual void FindNearbySupplySource(BehaviorUpdateContext context)
-        {
-            var supplySources = GetNearbySupplySources(context);
-
-            var distanceToCurrentSupplySource = float.PositiveInfinity;
-            foreach (var supplySource in supplySources)
-            {
-                var offsetToSource = supplySource.Translation - GameObject.Translation;
-                var distanceToSource = offsetToSource.Vector2XY().Length();
-
-                if (distanceToSource > distanceToCurrentSupplySource)
-                {
-                    continue;
-                }
-
-                var dockUpdate = supplySource.FindBehavior<SupplyWarehouseDockUpdate>() ?? null;
-
-                if (!SupplySourceHasBoxes(context, dockUpdate, supplySource))
-                {
-                    continue;
-                }
-
-                _currentSupplySource = supplySource;
-                _currentSourceDockUpdate = dockUpdate;
-                distanceToCurrentSupplySource = distanceToSource;
-            }
-        }
-
         internal virtual float GetHarvestActivationRange() => 0.0f;
-        internal virtual float GetPreparationTime() => 0.0f;
+        internal virtual LogicFrameSpan GetPreparationTime() => LogicFrameSpan.Zero;
 
         internal virtual bool SupplySourceHasBoxes(BehaviorUpdateContext context, SupplyWarehouseDockUpdate dockUpdate, GameObject supplySource)
         {
@@ -106,7 +72,10 @@ namespace OpenSage.Logic.Object
 
         internal virtual void GetBox(BehaviorUpdateContext context)
         {
-            _currentSourceDockUpdate?.GetBox();
+            if (_currentSourceDockUpdate?.GetBox() == true && !_currentSourceDockUpdate.HasBoxes())
+            {
+                GameObject.GameContext.AudioSystem.PlayAudioEvent(GameObject, _moduleData.SuppliesDepletedVoice.Value);
+            }
         }
 
         internal virtual void SetGatheringConditionFlags()
@@ -114,7 +83,7 @@ namespace OpenSage.Logic.Object
 
         }
 
-        internal virtual float GetPickingUpTime() => 0.0f;
+        internal virtual LogicFrameSpan GetPickingUpTime() => LogicFrameSpan.Zero;
 
         internal virtual void SetActionConditionFlags()
         {
@@ -126,42 +95,14 @@ namespace OpenSage.Logic.Object
 
         }
 
-        internal virtual List<GameObject> GetNearbySupplyCenters(BehaviorUpdateContext context)
+        internal virtual GameObject FindClosestSupplyWarehouse(BehaviorUpdateContext context)
         {
-            var nearbyObjects = context.GameContext.Scene3D.Quadtree.FindNearby(GameObject, GameObject.Transform, _moduleData.SupplyWarehouseScanDistance);
-            return nearbyObjects.Where(x => x.Definition.KindOf.Get(ObjectKinds.CashGenerator)).ToList();
+            return context.GameObject.Owner.SupplyManager.FindClosestSupplyWarehouse(context.GameObject);
         }
 
-        internal virtual void FindNearbySupplyTarget(BehaviorUpdateContext context)
+        private static GameObject FindClosestSupplyCenter(BehaviorUpdateContext context)
         {
-            var supplyTargets = GetNearbySupplyCenters(context);
-
-            var distanceToCurrentSupplyTarget = float.PositiveInfinity;
-            foreach (var supplyTarget in supplyTargets)
-            {
-                if (supplyTarget.Owner != GameObject.Owner)
-                {
-                    continue;
-                }
-
-                var offsetToTarget = supplyTarget.Translation - GameObject.Translation;
-                var distanceToTarget = offsetToTarget.Vector2XY().Length();
-
-                if (distanceToTarget > distanceToCurrentSupplyTarget)
-                {
-                    continue;
-                }
-
-                var dockUpdate = supplyTarget.FindBehavior<SupplyCenterDockUpdate>() ?? null;
-                if (!dockUpdate?.CanApproach() ?? false)
-                {
-                    continue;
-                }
-
-                CurrentSupplyTarget = supplyTarget;
-                _currentTargetDockUpdate = dockUpdate;
-                distanceToCurrentSupplyTarget = distanceToTarget;
-            }
+            return context.GameObject.Owner.SupplyManager.FindClosestSupplyCenter(context.GameObject);
         }
 
         internal override void Update(BehaviorUpdateContext context)
@@ -178,20 +119,22 @@ namespace OpenSage.Logic.Object
                         break;
                     }
 
-                    if (_currentSupplySource == null
+                    if (CurrentSupplySource == null
                         || (_currentSourceDockUpdate != null && !_currentSourceDockUpdate.HasBoxes()))
                     {
-                        FindNearbySupplySource(context);
+                        CurrentSupplySource = FindClosestSupplyWarehouse(context);
                     }
 
-                    if (_currentSupplySource == null)
+                    if (CurrentSupplySource == null)
                     {
                         break;
                     }
 
-                    var direction = Vector3.Normalize(_currentSupplySource.Translation - GameObject.Translation);
+                    _currentSourceDockUpdate = CurrentSupplySource.FindBehavior<SupplyWarehouseDockUpdate>();
 
-                    SetTargetPoint(_currentSupplySource.Translation - direction * GetHarvestActivationRange());
+                    var direction = Vector3.Normalize(CurrentSupplySource.Translation - GameObject.Translation);
+
+                    SetTargetPoint(CurrentSupplySource.Translation - direction * GetHarvestActivationRange());
                     SupplyGatherState = SupplyGatherStates.ApproachingSupplySource;
                     break;
 
@@ -204,11 +147,11 @@ namespace OpenSage.Logic.Object
                     break;
 
                 case SupplyGatherStates.RequestingSupplies:
-                    var boxesAvailable = SupplySourceHasBoxes(context, _currentSourceDockUpdate, _currentSupplySource);
+                    var boxesAvailable = SupplySourceHasBoxes(context, _currentSourceDockUpdate, CurrentSupplySource);
 
                     if (!boxesAvailable)
                     {
-                        _currentSupplySource = null;
+                        CurrentSupplySource = null;
                         if (_numBoxes == 0)
                         {
                             GameObject.ModelConditionFlags.Set(ModelConditionFlag.Docking, false);
@@ -220,29 +163,30 @@ namespace OpenSage.Logic.Object
                     {
                         GetBox(context);
                         var waitTime = _moduleData.SupplyWarehouseActionDelay + GetPreparationTime();
-                        _waitUntil = context.Time.TotalTime + TimeSpan.FromMilliseconds(waitTime);
+                        _waitUntil = context.LogicFrame + waitTime;
                         SupplyGatherState = SupplyGatherStates.GatheringSupplies;
                         SetGatheringConditionFlags();
                         break;
                     }
 
                     GameObject.ModelConditionFlags.Set(ModelConditionFlag.Docking, false);
-                    GameObject.ModelConditionFlags.Set(ModelConditionFlag.Carrying, true);
                     SetActionConditionFlags();
-                    _waitUntil = context.Time.TotalTime + TimeSpan.FromMilliseconds(GetPickingUpTime());
+                    _waitUntil = context.LogicFrame + GetPickingUpTime();
                     SupplyGatherState = SupplyGatherStates.PickingUpSupplies;
                     break;
 
                 case SupplyGatherStates.GatheringSupplies:
-                    if (context.Time.TotalTime > _waitUntil)
+                    if (context.LogicFrame >= _waitUntil)
                     {
                         _numBoxes++;
+                        GameObject.Supply = _numBoxes;
+                        GameObject.ModelConditionFlags.Set(ModelConditionFlag.Carrying, true);
                         SupplyGatherState = SupplyGatherStates.RequestingSupplies;
                     }
                     break;
 
                 case SupplyGatherStates.PickingUpSupplies:
-                    if (context.Time.TotalTime > _waitUntil)
+                    if (context.LogicFrame >= _waitUntil)
                     {
                         SupplyGatherState = SupplyGatherStates.SearchingForSupplyTarget;
                         ClearActionConditionFlags();
@@ -252,7 +196,7 @@ namespace OpenSage.Logic.Object
                 case SupplyGatherStates.SearchingForSupplyTarget:
                     if (CurrentSupplyTarget == null)
                     {
-                        FindNearbySupplyTarget(context);
+                        CurrentSupplyTarget = FindClosestSupplyCenter(context);
                     }
 
                     if (CurrentSupplyTarget == null)
@@ -260,7 +204,7 @@ namespace OpenSage.Logic.Object
                         break;
                     }
 
-                    _currentTargetDockUpdate ??= CurrentSupplyTarget.FindBehavior<SupplyCenterDockUpdate>();
+                    _currentTargetDockUpdate = CurrentSupplyTarget.FindBehavior<SupplyCenterDockUpdate>();
 
                     if (!_currentTargetDockUpdate.CanApproach())
                     {
@@ -285,18 +229,21 @@ namespace OpenSage.Logic.Object
                 case SupplyGatherStates.StartDumpingSupplies:
                     GameObject.ModelConditionFlags.Set(ModelConditionFlag.Docking, true);
                     SupplyGatherState = SupplyGatherStates.DumpingSupplies;
-                    _waitUntil = context.Time.TotalTime + TimeSpan.FromMilliseconds(_moduleData.SupplyCenterActionDelay);
+                    // todo: this might not be entirely accurate since partial loads can be deposited if unloading is manually aborted early
+                    _waitUntil = context.LogicFrame + _moduleData.SupplyCenterActionDelay * _numBoxes;
                     break;
 
                 case SupplyGatherStates.DumpingSupplies:
-                    if (context.Time.TotalTime > _waitUntil)
+                    if (context.LogicFrame >= _waitUntil)
                     {
                         SupplyGatherState = SupplyGatherStates.FinishedDumpingSupplies;
 
                         var assetStore = context.GameContext.AssetLoadContext.AssetStore;
                         var bonusAmountPerBox = GetAdditionalValuePerSupplyBox(assetStore.Upgrades);
-                        _currentTargetDockUpdate.DumpBoxes(assetStore, ref _numBoxes, bonusAmountPerBox);
+                        var amountDeposited = _currentTargetDockUpdate.DumpBoxes(assetStore, ref _numBoxes, bonusAmountPerBox);
+                        GameObject.ActiveCashEvent = new CashEvent(amountDeposited, GameObject.Owner.Color);
 
+                        GameObject.Supply = _numBoxes;
                         GameObject.ModelConditionFlags.Set(ModelConditionFlag.Docking, false);
                         GameObject.ModelConditionFlags.Set(ModelConditionFlag.Carrying, false);
                     }
@@ -313,23 +260,23 @@ namespace OpenSage.Logic.Object
     /// </summary>
     public abstract class SupplyAIUpdateModuleData : AIUpdateModuleData
     {
-        internal static new readonly IniParseTable<SupplyAIUpdateModuleData> FieldParseTable = AIUpdateModuleData.FieldParseTable
+        internal new static readonly IniParseTable<SupplyAIUpdateModuleData> FieldParseTable = AIUpdateModuleData.FieldParseTable
             .Concat(new IniParseTable<SupplyAIUpdateModuleData>
             {
                 { "MaxBoxes", (parser, x) => x.MaxBoxes = parser.ParseInteger() },
-                { "SupplyCenterActionDelay", (parser, x) => x.SupplyCenterActionDelay = parser.ParseInteger() },
-                { "SupplyWarehouseActionDelay", (parser, x) => x.SupplyWarehouseActionDelay = parser.ParseInteger() },
+                { "SupplyCenterActionDelay", (parser, x) => x.SupplyCenterActionDelay = parser.ParseTimeMillisecondsToLogicFrames() },
+                { "SupplyWarehouseActionDelay", (parser, x) => x.SupplyWarehouseActionDelay = parser.ParseTimeMillisecondsToLogicFrames() },
                 { "SupplyWarehouseScanDistance", (parser, x) => x.SupplyWarehouseScanDistance = parser.ParseInteger() },
-                { "SuppliesDepletedVoice", (parser, x) => x.SuppliesDepletedVoice = parser.ParseAssetReference() }
+                { "SuppliesDepletedVoice", (parser, x) => x.SuppliesDepletedVoice = parser.ParseAudioEventReference() }
             });
 
         public int MaxBoxes { get; private set; }
         // ms for whole thing (one transaction)
-        public int SupplyCenterActionDelay { get; private set; }
+        public LogicFrameSpan SupplyCenterActionDelay { get; private set; }
         // ms per box (many small transactions)
-        public int SupplyWarehouseActionDelay { get; private set; }
+        public LogicFrameSpan SupplyWarehouseActionDelay { get; private set; }
         // Max distance to look for a warehouse, or we go home.  (Direct dock command on warehouse overrides, and no max on Center Scan)
         public int SupplyWarehouseScanDistance { get; private set; }
-        public string SuppliesDepletedVoice { get; private set; }
+        public LazyAssetReference<BaseAudioEventInfo> SuppliesDepletedVoice { get; private set; }
     }
 }

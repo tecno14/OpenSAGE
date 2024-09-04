@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Linq;
-using OpenSage.Data.Ini;
 using OpenSage.Data.Wnd;
 using OpenSage.Gui.Wnd.Images;
 using OpenSage.Mathematics;
@@ -12,8 +11,8 @@ namespace OpenSage.Gui.Wnd.Controls
     {
         public event EventHandler SelectedIndexChanged
         {
-            add { _itemsArea.SelectedIndexChanged += value; }
-            remove { _itemsArea.SelectedIndexChanged -= value; }
+            add => _itemsArea.SelectedIndexChanged += value;
+            remove => _itemsArea.SelectedIndexChanged -= value;
         }
 
         private readonly Button _upButton;
@@ -144,7 +143,7 @@ namespace OpenSage.Gui.Wnd.Controls
 
                 ThumbImage = imageLoader.CreateFromWndDrawData(wndWindow.SliderThumbEnabledDrawData, 0);
                 ThumbHoverImage = imageLoader.CreateFromWndDrawData(wndWindow.SliderThumbHiliteDrawData, 0);
-            };
+            }
 
             if (wndWindow.ListBoxData.ForceSelect)
             {
@@ -171,14 +170,14 @@ namespace OpenSage.Gui.Wnd.Controls
             Controls.Add(_itemsArea);
 
             // Calculate the columnwidths
-            int missing = columns - columnWidths.Length;
+            var missing = columns - columnWidths.Length;
             if (missing > 0)
             {
                 var currentColumns = columnWidths.ToList();
-                int remaining = 100 - columnWidths.Sum();
+                var remaining = 100 - columnWidths.Sum();
 
                 // Split the remaining columns evenly
-                for (int i = 0; i < missing; ++i)
+                for (var i = 0; i < missing; ++i)
                 {
                     currentColumns.Add(remaining / missing);
                 }
@@ -273,7 +272,7 @@ namespace OpenSage.Gui.Wnd.Controls
     {
         public event EventHandler SelectedIndexChanged;
 
-        private ListBoxDataItem[] _items = new ListBoxDataItem[0];
+        private ListBoxDataItem[] _items = Array.Empty<ListBoxDataItem>();
         public ListBoxDataItem[] Items
         {
             get => _items;
@@ -282,6 +281,8 @@ namespace OpenSage.Gui.Wnd.Controls
                 Controls.Clear();
 
                 _items = value;
+                _hoveredIndex = -1;
+                _selectedIndex = -1;
 
                 foreach (var item in value)
                 {
@@ -318,10 +319,7 @@ namespace OpenSage.Gui.Wnd.Controls
         public int HoveredIndex
         {
             get => _hoveredIndex;
-            set
-            {
-                UpdateHoveredItem(value);
-            }
+            set => UpdateHoveredItem(value);
         }
 
         private int _maxDisplay = -1;
@@ -400,15 +398,16 @@ namespace OpenSage.Gui.Wnd.Controls
         {
             var stillVisible = MaxDisplay == -1 ? Items.Length : MaxDisplay;
             var y = 0;
-            if (Controls.Any())
+            var firstChild = Controls.FirstOrDefault();
+            if (firstChild != null)
             {
-                y = _currentStartIndex * Controls.First().GetPreferredSize(ClientSize).Height * -1;
+                y = _currentStartIndex * firstChild.GetPreferredSize(ClientSize).Height * -1;
             }
 
             foreach (var child in Controls.AsList())
             {
                 var childHeight = child.GetPreferredSize(ClientSize).Height;
-                if (y >= 0 && stillVisible > 0)
+                if (y >= 0 && y + childHeight < Bounds.Height && stillVisible > 0)
                 {
                     child.Visible = true;
                     stillVisible--;
@@ -454,6 +453,7 @@ namespace OpenSage.Gui.Wnd.Controls
             }
 
             const int horizontalPadding = 3;
+            const int verticalPadding = 1;
             var availableWidth = proposedSize.Width - ((_parent.ColumnWidths.Length + 1) * horizontalPadding);
 
             int calculateColumnWidth(int column)
@@ -479,7 +479,7 @@ namespace OpenSage.Gui.Wnd.Controls
 
             var result = new ListBoxItemDimension
             {
-                Size = new Size(proposedSize.Width, itemHeight),
+                Size = new Size(proposedSize.Width, itemHeight + 2 * verticalPadding),
                 ColumnBounds = new Rectangle[_parent.ColumnWidths.Length]
             };
 
@@ -488,7 +488,7 @@ namespace OpenSage.Gui.Wnd.Controls
             {
                 var columnWidth = calculateColumnWidth(column);
 
-                result.ColumnBounds[column] = new Rectangle(x, 0, columnWidth, itemHeight);
+                result.ColumnBounds[column] = new Rectangle(x, verticalPadding, columnWidth, itemHeight);
 
                 x += columnWidth + horizontalPadding;
             }

@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Numerics;
 using OpenSage.Data.Ini;
+using OpenSage.Logic.AI.AIStates;
+using OpenSage.Logic.AI;
 using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
@@ -16,13 +18,25 @@ namespace OpenSage.Logic.Object
 
         private Queue<string> _pathToStart;
         private Queue<string> _pathToParking;
-        private string? _currentTaxiingTarget;
+        private string _currentTaxiingTarget;
 
         public JetAIState CurrentJetAIState;
 
-        private TimeSpan _waitUntil;
+        private LogicFrame _waitUntil;
 
         private bool _afterburnerEnabled;
+
+        private Vector3 _positionSomething;
+
+        private uint _unknownInt6;
+        private uint _unknownInt7;
+        private uint _unknownInt8;
+        private uint _unknownInt9;
+        private uint _unknownInt10;
+        private uint _unknownInt11;
+        private bool _unknownBool5;
+
+        private readonly UnknownStateData _stateData = new();
 
         public enum JetAIState
         {
@@ -46,6 +60,29 @@ namespace OpenSage.Logic.Object
         {
             _moduleData = moduleData;
             CurrentJetAIState = JetAIState.Parked;
+        }
+
+        private protected override AIUpdateStateMachine CreateStateMachine(GameObject gameObject) => new JetAIUpdateStateMachine(gameObject);
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(2);
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistVector3(ref _positionSomething);
+
+            reader.PersistObject(_stateData);
+
+            reader.PersistUInt32(ref _unknownInt6); // 255, probably frameSomething
+            reader.PersistUInt32(ref _unknownInt7); // 255, probably frameSomething
+            reader.PersistUInt32(ref _unknownInt8); // 0
+            reader.PersistUInt32(ref _unknownInt9); // 1
+            reader.PersistUInt32(ref _unknownInt10); // 0
+            reader.PersistUInt32(ref _unknownInt11); // 6
+
+            reader.PersistBoolean(ref _unknownBool5);
         }
 
         internal override void SetTargetPoint(Vector3 targetPoint)
@@ -151,11 +188,11 @@ namespace OpenSage.Logic.Object
                     }
 
                     CurrentJetAIState = JetAIState.PreparingStart;
-                    _waitUntil = context.Time.TotalTime + TimeSpan.FromMilliseconds(_moduleData.TakeoffPause);
+                    _waitUntil = context.LogicFrame + _moduleData.TakeoffPause;
                     break;
 
                 case JetAIState.PreparingStart:
-                    if (context.Time.TotalTime < _waitUntil)
+                    if (context.LogicFrame < _waitUntil)
                     {
                         break;
                     }
@@ -195,17 +232,16 @@ namespace OpenSage.Logic.Object
                         break;
                     }
                     CurrentJetAIState = JetAIState.ReachedTargetPoint;
-                    _waitUntil = context.Time.TotalTime + TimeSpan.FromMilliseconds(_moduleData.ReturnToBaseIdleTime);
+                    _waitUntil = context.LogicFrame + _moduleData.ReturnToBaseIdleTime;
                     break;
 
                 case JetAIState.ReachedTargetPoint:
-                    if (context.Time.TotalTime < _waitUntil)
+                    if (context.LogicFrame < _waitUntil)
                     {
                         break;
                     }
 
-                    var endPosition =
-                        Base.ToWorldspace(parkingPlaceBehavior.GetRunwayEndPoint(GameObject));
+                    var endPosition = Base.ToWorldspace(parkingPlaceBehavior.GetRunwayEndPoint(GameObject));
 
                     base.SetTargetPoint(endPosition);
                     CurrentJetAIState = JetAIState.ReturningToBase;
@@ -243,7 +279,7 @@ namespace OpenSage.Logic.Object
             if (GameObject.ModelConditionFlags.Get(ModelConditionFlag.Dying))
             {
                 parkingPlaceBehavior.ClearObjectFromSlot(GameObject);
-                Base.ProductionUpdate?.CloseDoor(context.Time, parkingPlaceBehavior.GetCorrespondingSlot(GameObject));
+                Base.ProductionUpdate?.CloseDoor(parkingPlaceBehavior.GetCorrespondingSlot(GameObject));
             }
         }
 
@@ -259,10 +295,10 @@ namespace OpenSage.Logic.Object
                 var nextPoint = path.Peek();
                 if (parkingPlaceBehavior.IsTaxiingPointBlocked(nextPoint))
                 {
-                    _waitUntil = context.Time.TotalTime + TimeSpan.FromMilliseconds(_moduleData.TakeoffPause);
+                    _waitUntil = context.LogicFrame + _moduleData.TakeoffPause;
                     return true;
                 }
-                if (context.Time.TotalTime < _waitUntil)
+                if (context.LogicFrame < _waitUntil)
                 {
                     return true;
                 }
@@ -277,6 +313,14 @@ namespace OpenSage.Logic.Object
         }
     }
 
+    internal sealed class JetAIUpdateStateMachine : AIUpdateStateMachine
+    {
+        public JetAIUpdateStateMachine(GameObject gameObject)
+            : base(gameObject)
+        {
+            AddState(1013, new WaitForAirfieldState());
+        }
+    }
 
     /// <summary>
     /// Allows the use of VoiceLowFuel and Afterburner within UnitSpecificSounds section of the object.
@@ -294,7 +338,7 @@ namespace OpenSage.Logic.Object
                 { "OutOfAmmoDamagePerSecond", (parser, x) => x.OutOfAmmoDamagePerSecond = parser.ParsePercentage() },
                 { "TakeoffSpeedForMaxLift", (parser, x) => x.TakeoffSpeedForMaxLift = parser.ParsePercentage() },
                 { "TakeoffDistForMaxLift", (parser, x) => x.TakeoffDistForMaxLift = parser.ParsePercentage() },
-                { "TakeoffPause", (parser, x) => x.TakeoffPause = parser.ParseInteger() },
+                { "TakeoffPause", (parser, x) => x.TakeoffPause = parser.ParseTimeMillisecondsToLogicFrames() },
                 { "MinHeight", (parser, x) => x.MinHeight = parser.ParseInteger() },
                 { "NeedsRunway", (parser, x) => x.NeedsRunway = parser.ParseBoolean() },
                 { "KeepsParkingSpaceWhenAirborne", (parser, x) => x.KeepsParkingSpaceWhenAirborne = parser.ParseBoolean() },
@@ -304,7 +348,7 @@ namespace OpenSage.Logic.Object
                 { "AttackersMissPersistTime", (parser, x) => x.AttackersMissPersistTime = parser.ParseInteger() },
                 { "ReturnForAmmoLocomotorType", (parser, x) => x.ReturnForAmmoLocomotorType = parser.ParseEnum<LocomotorSetType>() },
                 { "ParkingOffset", (parser, x) => x.ParkingOffset = parser.ParseInteger() },
-                { "ReturnToBaseIdleTime", (parser, x) => x.ReturnToBaseIdleTime = parser.ParseInteger() },
+                { "ReturnToBaseIdleTime", (parser, x) => x.ReturnToBaseIdleTime = parser.ParseTimeMillisecondsToLogicFrames() },
             });
 
         /// <summary>
@@ -315,7 +359,7 @@ namespace OpenSage.Logic.Object
         /// smaller numbers give more lift sooner when taking off
         /// </summary>
         public Percentage TakeoffSpeedForMaxLift { get; private set; }
-        public int TakeoffPause { get; private set; }
+        public LogicFrameSpan TakeoffPause { get; private set; }
         public int MinHeight { get; private set; }
 
         /// <summary>
@@ -348,12 +392,12 @@ namespace OpenSage.Logic.Object
         /// <summary>
         /// if idle for this long, return to base, even if not out of ammo
         /// </summary>
-        public int ReturnToBaseIdleTime { get; private set; }
+        public LogicFrameSpan ReturnToBaseIdleTime { get; private set; }
 
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public Percentage TakeoffDistForMaxLift { get; private set; }
 
-        internal override AIUpdate CreateAIUpdate(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
             return new JetAIUpdate(gameObject, this);
         }

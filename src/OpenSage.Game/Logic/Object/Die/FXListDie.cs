@@ -1,37 +1,33 @@
-﻿using System.IO;
-using OpenSage.Content;
+﻿using OpenSage.Content;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 using OpenSage.FX;
 
 namespace OpenSage.Logic.Object
 {
     public sealed class FXListDie : DieModule
     {
-        private readonly FXListDieModuleData _moduleData;
+        private new FXListDieModuleData ModuleData { get; }
 
-        internal FXListDie(FXListDieModuleData moduleData)
+        internal FXListDie(FXListDieModuleData moduleData) : base(moduleData)
         {
-            _moduleData = moduleData;
+            ModuleData = moduleData;
         }
 
-        internal override void OnDie(BehaviorUpdateContext context, DeathType deathType)
+        private protected override void Die(BehaviorUpdateContext context, DeathType deathType)
         {
-            _moduleData.DeathFX.Value.Execute(new FXListExecutionContext(
+            ModuleData.DeathFX.Value.Execute(new FXListExecutionContext(
                 context.GameObject.Rotation,
                 context.GameObject.Translation,
                 context.GameContext));
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 

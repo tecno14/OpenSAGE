@@ -2,10 +2,20 @@
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class WeaponBonusUpgrade : UpgradeModule
+    internal sealed class WeaponBonusUpgrade : UpgradeModule
     {
-        internal WeaponBonusUpgrade(GameObject gameObject, WeaponBonusUpgradeModuleData moduleData) : base(gameObject, moduleData)
+        internal WeaponBonusUpgrade(GameObject gameObject, WeaponBonusUpgradeModuleData moduleData)
+            : base(gameObject, moduleData)
         {
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
         }
     }
 

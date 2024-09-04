@@ -1,11 +1,12 @@
 ﻿using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
+using ImGuiNET;
 using OpenSage.Content.Loaders;
 using OpenSage.Graphics.Animation;
 using OpenSage.Graphics.Cameras;
 using OpenSage.Graphics.Rendering;
 using OpenSage.Graphics.Shaders;
+using OpenSage.Mathematics;
 using Veldrid;
 
 namespace OpenSage.Graphics
@@ -13,6 +14,8 @@ namespace OpenSage.Graphics
     public sealed class ModelInstance : DisposableBase
     {
         private readonly GraphicsDevice _graphicsDevice;
+
+        internal readonly ModelMeshInstance[] MeshInstances;
 
         /// <summary>
         /// Bone transforms relative to root bone.
@@ -38,22 +41,24 @@ namespace OpenSage.Graphics
         /// </summary>
         internal readonly bool[] BoneFrameVisibilities;
 
-        internal readonly BeforeRenderDelegate[][] BeforeRenderDelegates;
-        internal readonly BeforeRenderDelegate[][] BeforeRenderDelegatesDepth;
-
-        private readonly bool _hasSkinnedMeshes;
-
         private readonly Matrix4x4[] _skinningBones;
 
         private readonly DeviceBuffer _skinningBuffer;
-
-        internal readonly ResourceSet SkinningBufferResourceSet;
 
         public readonly Model Model;
 
         public readonly ModelBoneInstance[] ModelBoneInstances;
 
         public readonly List<AnimationInstance> AnimationInstances;
+
+        public readonly DeviceBuffer SkinningBuffer;
+
+        // TODO: Use this.
+        public ColorRgba HouseColor;
+
+        public readonly bool[] UnknownBools;
+
+        internal readonly ConstantBuffer<MeshShaderResources.RenderItemConstantsPS> RenderItemConstantsBufferPS;
 
         internal ModelInstance(Model model, AssetLoadContext loadContext)
         {
@@ -79,12 +84,9 @@ namespace OpenSage.Graphics
                 BoneFrameVisibilities[i] = true;
             }
 
-            _hasSkinnedMeshes = model.SubObjects.Any(x => x.RenderObject.Skinned);
-
-            DeviceBuffer skinningBuffer;
-            if (_hasSkinnedMeshes)
+            if (model.HasSkinnedMeshes)
             {
-                _skinningBuffer = skinningBuffer = AddDisposable(_graphicsDevice.ResourceFactory.CreateBuffer(
+                _skinningBuffer = SkinningBuffer = AddDisposable(_graphicsDevice.ResourceFactory.CreateBuffer(
                     new BufferDescription(
                         (uint) (64 * model.BoneHierarchy.Bones.Length),
                         BufferUsage.StructuredBufferReadOnly | BufferUsage.Dynamic,
@@ -95,44 +97,43 @@ namespace OpenSage.Graphics
             }
             else
             {
-                skinningBuffer = loadContext.StandardGraphicsResources.GetNullStructuredBuffer(64);
+                SkinningBuffer = loadContext.StandardGraphicsResources.GetNullStructuredBuffer(64);
             }
-
-            SkinningBufferResourceSet = AddDisposable(loadContext.ShaderResources.Mesh.CreateSkinningResourceSet(skinningBuffer));
 
             AnimationInstances = new List<AnimationInstance>();
 
-            BeforeRenderDelegates = new BeforeRenderDelegate[model.SubObjects.Length][];
-            BeforeRenderDelegatesDepth = new BeforeRenderDelegate[model.SubObjects.Length][];
+            RenderItemConstantsBufferPS = AddDisposable(new ConstantBuffer<MeshShaderResources.RenderItemConstantsPS>(_graphicsDevice, "RenderItemConstantsPS"));
+
+            RenderItemConstantsBufferPS.Value = new MeshShaderResources.RenderItemConstantsPS
+            {
+                HouseColor = Vector3.One,
+                Opacity = 1.0f,
+                TintColor = Vector3.One
+            };
+            RenderItemConstantsBufferPS.Update(_graphicsDevice);
+
+            MeshInstances = new ModelMeshInstance[model.SubObjects.Length];
 
             for (var i = 0; i < model.SubObjects.Length; i++)
             {
-                var mesh = model.SubObjects[i].RenderObject;
+                var renderObject = model.SubObjects[i].RenderObject;
 
-                BeforeRenderDelegates[i] = new BeforeRenderDelegate[mesh.MeshParts.Count];
-                BeforeRenderDelegatesDepth[i] = new BeforeRenderDelegate[mesh.MeshParts.Count];
-
-                for (var j = 0; j < mesh.MeshParts.Count; j++)
+                if (!(renderObject is ModelMesh mesh))
                 {
-                    var meshBeforeRender = mesh.BeforeRenderDelegates[j];
-                    var meshBeforeRenderDepth = mesh.BeforeRenderDelegatesDepth[j];
-
-                    BeforeRenderDelegates[i][j] = (cl, context) =>
-                    {
-                        cl.SetGraphicsResourceSet(8, SkinningBufferResourceSet);
-                        meshBeforeRender(cl, context);
-                    };
-
-                    BeforeRenderDelegatesDepth[i][j] = (cl, context) =>
-                    {
-                        cl.SetGraphicsResourceSet(3, SkinningBufferResourceSet);
-                        meshBeforeRenderDepth(cl, context);
-                    };
+                    continue;
                 }
+
+                MeshInstances[i] = AddDisposable(
+                    new ModelMeshInstance(
+                        mesh,
+                        this,
+                        loadContext));
             }
+
+            UnknownBools = new bool[model.SubObjects.Length];
         }
 
-        public void Update(in TimeInterval gameTime, List<string> hiddenSubObjects = null)
+        public void Update(in TimeInterval gameTime)
         {
             // TODO: Don't update animations if model isn't visible.
 
@@ -166,7 +167,7 @@ namespace OpenSage.Graphics
 
                     RelativeBoneTransforms[i] = ModelBoneInstances[i].Matrix * parentTransform;
 
-                    var parentVisible = bone.Parent == null || BoneVisibilities[bone.Parent.Index];
+                    var parentVisible = bone.Parent == null || (BoneVisibilities[bone.Parent.Index] && BoneFrameVisibilities[bone.Parent.Index]);
 
                     BoneFrameVisibilities[i] = BoneVisibilities[i] && parentVisible && ModelBoneInstances[i].Visible;
                 }
@@ -177,7 +178,7 @@ namespace OpenSage.Graphics
                 modelBoneInstance.ResetDirty();
             }
 
-            if (!_hasSkinnedMeshes)
+            if (!Model.HasSkinnedMeshes)
             {
                 return;
             }
@@ -189,6 +190,8 @@ namespace OpenSage.Graphics
 
             _graphicsDevice.UpdateBuffer(_skinningBuffer, 0, _skinningBones);
         }
+
+        public ref readonly Matrix4x4 GetWorldMatrix() => ref _worldMatrix;
 
         public void SetWorldMatrix(in Matrix4x4 worldMatrix)
         {
@@ -204,29 +207,44 @@ namespace OpenSage.Graphics
             RenderList renderList,
             Camera camera,
             bool castsShadow,
-            MeshShaderResources.RenderItemConstantsPS? renderItemConstantsPS,
-            List<string> hiddenSubObjects = null)
+            MeshShaderResources.RenderItemConstantsPS renderItemConstantsPS,
+            Dictionary<string, bool> shownSubObjects = null,
+            Dictionary<string, bool> hiddenSubObjects = null)
         {
+            if (RenderItemConstantsBufferPS.Value != renderItemConstantsPS)
+            {
+                RenderItemConstantsBufferPS.Value = renderItemConstantsPS;
+                RenderItemConstantsBufferPS.Update(_graphicsDevice);
+            }
+
             for (var i = 0; i < Model.SubObjects.Length; i++)
             {
                 var subObject = Model.SubObjects[i];
-                var name = subObject.Name.Split('.').Last();
-
-                if (hiddenSubObjects != null && hiddenSubObjects.Contains(name))
-                {
-                    continue;
-                }
 
                 subObject.RenderObject.BuildRenderList(
                     renderList,
                     camera,
                     this,
-                    BeforeRenderDelegates[i],
-                    BeforeRenderDelegatesDepth[i],
+                    MeshInstances[i],
                     subObject.Bone,
                     _worldMatrix,
                     castsShadow,
                     renderItemConstantsPS);
+            }
+        }
+
+        internal void DrawInspector()
+        {
+            ImGui.LabelText("Model", Model.Name ?? "<null>");
+
+            if (ImGui.TreeNodeEx("Animations", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                foreach (var animationInstance in AnimationInstances)
+                {
+                    animationInstance.DrawInspector();
+                }
+
+                ImGui.TreePop();
             }
         }
     }

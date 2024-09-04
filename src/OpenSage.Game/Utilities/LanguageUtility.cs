@@ -1,8 +1,8 @@
 ﻿using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using OpenSage.Data;
+using OpenSage.IO;
 
 namespace OpenSage.Utilities
 {
@@ -16,22 +16,29 @@ namespace OpenSage.Utilities
         /// <param name="gameDefinition"></param>
         /// <param name="rootDirectory"></param>
         /// <returns>language as string</returns>
-        public static string ReadCurrentLanguage(IGameDefinition gameDefinition, string rootDirectory)
+        public static string ReadCurrentLanguage(IGameDefinition gameDefinition, FileSystem fileSystem)
         {
             if (PlatformUtility.IsWindowsPlatform())
             {
                 if (gameDefinition.LanguageRegistryKeys != null && gameDefinition.LanguageRegistryKeys.Any())
                 {
-                    return ReadFromRegistry(gameDefinition.LanguageRegistryKeys);
+                    if(ReadFromRegistry(gameDefinition.LanguageRegistryKeys, out var language))
+                    {
+                        return language;
+                    }
                 }
             }
 
             switch (gameDefinition.Game)
             {
                 case SageGame.CncGenerals:
-                    return DetectFromFileSystem(rootDirectory, "Audio", ".big");
+                    return DetectFromFileSystem(fileSystem, "", "Audio", ".big");
                 case SageGame.CncGeneralsZeroHour:
-                    return DetectFromFileSystem(rootDirectory, "Audio", "ZH.big");
+                    return DetectFromFileSystem(fileSystem, "", "Audio", "ZH.big");
+                case SageGame.Bfme:
+                case SageGame.Bfme2:
+                case SageGame.Bfme2Rotwk:
+                    return DetectFromFileSystem(fileSystem, "lang", "", "Audio.big");
             }
 
             return DefaultLanguage;
@@ -42,18 +49,20 @@ namespace OpenSage.Utilities
         /// </summary>
         /// <param name="registryKeys"></param>
         /// <returns>language as string</returns>
-        private static string ReadFromRegistry(IEnumerable<RegistryKeyPath> registryKeys)
+        private static bool ReadFromRegistry(IEnumerable<RegistryKeyPath> registryKeys, out string language)
         {
+            language = DefaultLanguage;
             var registryValues = registryKeys.Select(RegistryUtility.GetRegistryValue);
             foreach (var registryValue in registryValues)
             {
                 if (!string.IsNullOrEmpty(registryValue))
                 {
-                    return registryValue;
+                    language = registryValue;
+                    return true;
                 }
             }
 
-            return DefaultLanguage;
+            return false;
         }
 
         /// <summary>
@@ -63,23 +72,24 @@ namespace OpenSage.Utilities
         /// <param name="filePrefix"></param>
         /// <param name="fileSuffix"></param>
         /// <returns>language as string</returns>
-        private static string DetectFromFileSystem(string rootDirectory, string filePrefix, string fileSuffix)
+        private static string DetectFromFileSystem(FileSystem fileSystem, string directory, string filePrefix, string fileSuffix)
         {
             if (string.IsNullOrEmpty(filePrefix) && string.IsNullOrEmpty(fileSuffix))
             {
                 return DefaultLanguage;
             }
 
-            var possibleFiles = Directory.GetFiles(rootDirectory, "*.*", SearchOption.AllDirectories).Where(i =>
-                (string.IsNullOrEmpty(filePrefix) || Path.GetFileName(i).Contains(filePrefix)) &&
-                (string.IsNullOrEmpty(fileSuffix) || Path.GetFileName(i).EndsWith(fileSuffix)));
-            foreach (var file in possibleFiles)
+            var files = fileSystem.GetFilesInDirectory(directory, $"{filePrefix}*{fileSuffix}") // there's no sense in searching subfolders
+                .Select(x => Path.GetFileName(x.FilePath))
+                .Select(x => string.IsNullOrEmpty(filePrefix) ? x : x[filePrefix.Length..])
+                .Select(x => string.IsNullOrEmpty(fileSuffix) ? x : x[..^fileSuffix.Length]);
+            foreach (var file in files)
             {
-                MatchCollection mc = Regex.Matches(file, $"(?<={filePrefix})(.*)(?={fileSuffix})");
-                if (mc.Count > 0 && !string.IsNullOrEmpty(mc[0].Value))
+                if (file.Length == 0)
                 {
-                    return mc[0].Value;
+                    continue;
                 }
+                return file;
             }
             return DefaultLanguage;
         }

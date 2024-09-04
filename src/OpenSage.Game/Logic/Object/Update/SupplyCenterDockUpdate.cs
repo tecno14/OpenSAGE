@@ -15,7 +15,7 @@ namespace OpenSage.Logic.Object
             _moduleData = moduleData;
         }
 
-        public void DumpBoxes(AssetStore assetStore, ref int numBoxes, int additionalAmountPerBox)
+        public int DumpBoxes(AssetStore assetStore, ref int numBoxes, int additionalAmountPerBox)
         {
             var gameData = assetStore.GameData.Current;
             var amountPerBox = (gameData.ValuePerSupplyBox + additionalAmountPerBox) * _moduleData.ValueMultiplier;
@@ -23,19 +23,31 @@ namespace OpenSage.Logic.Object
             if (_moduleData.BonusScience != null)
             {
                 var bonusUpgradeDefinition = assetStore.Upgrades.GetByName(_moduleData.BonusScience);
-                if (_gameObject.UpgradeAvailable(bonusUpgradeDefinition))
+                if (_gameObject.HasUpgrade(bonusUpgradeDefinition))
                 {
                     amountPerBox *= _moduleData.BonusScienceMultiplier;
                 }
             }
 
-            _gameObject.Owner.ReceiveMoney((uint)(numBoxes * amountPerBox));
+            var amount = (int)(numBoxes * amountPerBox * _gameObject.ProductionModifier);
+            _gameObject.Owner.BankAccount.Deposit((uint)amount);
             numBoxes = 0;
+
+            return amount;
         }
 
         internal override void Update(BehaviorUpdateContext context)
         {
             base.Update(context);
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
         }
     }
 

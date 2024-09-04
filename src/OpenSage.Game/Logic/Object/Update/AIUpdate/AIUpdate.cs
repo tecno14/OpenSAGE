@@ -1,9 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
+﻿using System.Collections.Generic;
 using System.Numerics;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+using OpenSage.Logic.AI;
 using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
@@ -12,12 +10,18 @@ namespace OpenSage.Logic.Object
     {
         private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
-        private readonly Dictionary<LocomotorSetType, Locomotor> _locomotors;
+        private protected readonly AIUpdateStateMachine StateMachine;
+
+        private readonly LocomotorSet _locomotorSet;
+        private LocomotorSetType _currentLocomotorSetType;
+
         public Locomotor CurrentLocomotor { get; protected set; }
 
         private readonly AIUpdateModuleData _moduleData;
 
         protected readonly GameObject GameObject;
+
+        private readonly TurretAIUpdate _turretAIUpdate;
 
         /// <summary>
         /// An enumerator of the waypoints if the unit is currently following a waypoint path.
@@ -26,6 +30,53 @@ namespace OpenSage.Logic.Object
         private IEnumerator<Vector3> _waypointEnumerator;
 
         private Vector3? _targetDirection;
+
+        private uint _unknownInt1;
+        private uint _unknownInt2;
+        private bool _unknownBool1;
+        private bool _unknownBool2;
+        private uint _unknownInt4;
+        private uint _unknownInt5;
+        private float _unknownFloat1;
+        private uint _unknownInt6;
+        private uint _unknownInt7;
+        private uint _unknownInt8;
+        private uint _unknownInt9;
+        private uint _unknownInt10;
+        private uint _unknownInt11;
+        private uint _unknownInt12;
+        private uint _unknownInt13;
+        private bool _unknownBool3;
+        private bool _unknownBool4;
+        private bool _unknownBool5;
+        private bool _unknownBool6;
+        private string _guardAreaPolygonTriggerName;
+        private string _attackPriorityName;
+        private uint _unknownInt14;
+        private bool _unknownBool7;
+        private uint _unknownInt15;
+        private bool _pathSomething;
+        private PathfindingPath _path;
+        private uint _unknownInt16;
+        private Vector3 _unknownPosition1;
+        private uint _objectToEnter;
+        private float _unknownFloat2;
+        private Point2D _unknownPos2D1;
+        private Point2D _unknownPos2D2;
+        private uint _unknownFrame1;
+        private uint _unknownFrame2;
+        private Vector3 _unknownPosition2;
+        private bool _unknownBool9;
+        private bool _unknownBool10;
+        private bool _unknownBool11;
+        private bool _unknownBool12;
+        private uint _unknownObjectId2;
+        private uint _unknownInt17;
+        private uint _unknownInt18;
+        private Vector3 _unknownPosition3;
+        private int _unknownInt19;
+        private int _unknownInt20;
+        private uint _unknownFrame3;
 
         /// <summary>
         /// A list of positions along the path to the current target point. "Path" as in pathfinding, not waypoint path.
@@ -39,26 +90,38 @@ namespace OpenSage.Logic.Object
 
             TargetPoints = new List<Vector3>();
 
-            _locomotors = new Dictionary<LocomotorSetType, Locomotor>();
+            StateMachine = CreateStateMachine(gameObject);
+
+            _locomotorSet = new LocomotorSet(gameObject);
+            _currentLocomotorSetType = (LocomotorSetType)(-1);
 
             SetLocomotor(LocomotorSetType.Normal);
+
+            if (_moduleData.Turret != null)
+            {
+                _turretAIUpdate = _moduleData.Turret.CreateTurretAIUpdate(GameObject);
+            }
         }
+
+        private protected virtual AIUpdateStateMachine CreateStateMachine(GameObject gameObject) => new(gameObject);
 
         internal void SetLocomotor(LocomotorSetType type)
         {
-            if (!_locomotors.TryGetValue(type, out var locomotor))
+            if (_currentLocomotorSetType == type)
             {
-                var locomotorSet = GameObject.Definition.LocomotorSets.Find(x => x.Condition == type);
-                locomotor = (locomotorSet?.Locomotor.Value != null)
-                    ? new Locomotor(GameObject, locomotorSet)
-                    : null;
-                if (locomotor != null)
-                {
-                    _locomotors[type] = locomotor;
-                }
+                return;
             }
 
-            CurrentLocomotor = locomotor;
+            if (!GameObject.Definition.LocomotorSets.TryGetValue(type, out var locomotorSetTemplate))
+            {
+                return;
+            }
+
+            _locomotorSet.Reset();
+            _locomotorSet.Initialize(locomotorSetTemplate);
+
+            // TODO: Use actual surface type.
+            CurrentLocomotor = _locomotorSet.GetLocomotorForSurfaces(Surfaces.Ground);
         }
 
         internal void AddTargetPoint(in Vector3 targetPoint)
@@ -75,7 +138,7 @@ namespace OpenSage.Logic.Object
                 return;
             }
 
-            if (!GameObject.Definition.KindOf.Get(ObjectKinds.Aircraft))
+            if (!GameObject.Definition.KindOf.Get(ObjectKinds.Aircraft) && targetPoint != GameObject.Translation)
             {
                 var start = GameObject.Translation;
                 var path = GameObject.GameContext.Navigation.CalculatePath(start, targetPoint, out var endIsPassable);
@@ -120,7 +183,22 @@ namespace OpenSage.Logic.Object
             MoveToNextWaypointOrStop();
         }
 
-        internal void Stop()
+        protected virtual void ArrivedAtDestination()
+        {
+        }
+
+        /// <summary>
+        /// Ceases all behavior by the unit, like when the stop button is pressed.
+        /// </summary>
+        internal virtual void Stop()
+        {
+            StopMovingOnly();
+        }
+
+        /// <summary>
+        /// Stops moving, but does not clear any additional state machine behavior that might be running (e.g. construction, supply gathering, etc)
+        /// </summary>
+        private void StopMovingOnly()
         {
             GameObject.ModelConditionFlags.Set(ModelConditionFlag.Moving, false);
             _waypointEnumerator?.Dispose();
@@ -149,15 +227,27 @@ namespace OpenSage.Logic.Object
             }
             else
             {
-                Stop();
+                ArrivedAtDestination();
+                StopMovingOnly();
             }
         }
 
         internal override void Update(BehaviorUpdateContext context)
         {
-            if (CurrentLocomotor == null)
+            StateMachine.Update();
+
+            if (_turretAIUpdate != null)
             {
-                return;
+                _turretAIUpdate.Update(context, _moduleData.AutoAcquireEnemiesWhenIdle);
+            }
+            else
+            {
+                var target = GameObject.CurrentWeapon?.CurrentTarget;
+                if (target != null)
+                {
+                    var directionToTarget = (target.TargetPosition - GameObject.Translation);
+                    SetTargetDirection(directionToTarget);
+                }
             }
 
             if (GameObject.ModelConditionFlags.Get(ModelConditionFlag.Moving))
@@ -165,43 +255,49 @@ namespace OpenSage.Logic.Object
                 context.GameContext.Quadtree.Update(GameObject);
             }
 
-            if (TargetPoints.Count > 0)
+            if (CurrentLocomotor != null)
             {
-                Vector3? nextPoint = null;
-
-                if (TargetPoints.Count > 1)
+                if (TargetPoints.Count > 0)
                 {
-                    nextPoint = TargetPoints[1];
-                }
+                    Vector3? nextPoint = null;
 
-                var reachedPosition = CurrentLocomotor.MoveTowardsPosition(context.Time, TargetPoints[0], context.GameContext.Terrain.HeightMap, nextPoint);
-
-                // this should be moved to LogicTick
-                if (reachedPosition)
-                {
-                    Logger.Debug($"Reached point {TargetPoints[0]}");
-                    TargetPoints.RemoveAt(0);
-                    if (TargetPoints.Count == 0)
+                    if (TargetPoints.Count > 1)
                     {
-                        MoveToNextWaypointOrStop();
+                        nextPoint = TargetPoints[1];
+                    }
+
+                    var reachedPosition = CurrentLocomotor.MoveTowardsPosition(TargetPoints[0],
+                        context.GameContext.Terrain.HeightMap, nextPoint);
+
+                    // this should be moved to LogicTick
+                    if (reachedPosition)
+                    {
+                        Logger.Debug($"Reached point {TargetPoints[0]}");
+                        TargetPoints.RemoveAt(0);
+                        if (TargetPoints.Count == 0)
+                        {
+                            MoveToNextWaypointOrStop();
+                        }
                     }
                 }
-            }
-            else if (_targetDirection.HasValue)
-            {
-                if (!CurrentLocomotor.RotateToTargetDirection(context.Time, _targetDirection.Value))
+                else if (_targetDirection.HasValue)
                 {
-                    return;
-                }
+                    if (!CurrentLocomotor.RotateToTargetDirection(_targetDirection.Value))
+                    {
+                        return;
+                    }
 
-                _targetDirection = null;
-                Stop();
+                    _targetDirection = null;
+                    Stop();
+                }
+                else
+                {
+                    // maintain position (jets etc)
+                    CurrentLocomotor.MaintainPosition(context.GameContext.Terrain.HeightMap);
+                }
             }
-            else
-            {
-                // maintain position (jets etc)
-                CurrentLocomotor.MaintainPosition(context.Time, context.GameContext.Terrain.HeightMap);
-            }
+
+            base.Update(context);
         }
 
         internal override void DrawInspector()
@@ -209,59 +305,123 @@ namespace OpenSage.Logic.Object
             // TODO: Locomotor?
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 4)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(4);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
 
-            var unknown1 = reader.ReadBytes(50);
+            reader.PersistUInt32(ref _unknownInt1);
+            reader.PersistUInt32(ref _unknownInt2);
+            reader.PersistObject(StateMachine);
+            reader.PersistBoolean(ref _unknownBool1);
+            reader.PersistBoolean(ref _unknownBool2);
+            reader.PersistUInt32(ref _unknownInt4);
+            reader.PersistUInt32(ref _unknownInt5);
+            reader.PersistSingle(ref _unknownFloat1); // 999999
+            reader.PersistUInt32(ref _unknownInt6); // 2
+            reader.PersistUInt32(ref _unknownInt7); // 3
+            reader.PersistUInt32(ref _unknownInt8); // 3
+            reader.PersistUInt32(ref _unknownInt9); // 3
+            reader.PersistUInt32(ref _unknownInt10); // 0
+            reader.PersistUInt32(ref _unknownInt11); // 0
+            reader.PersistUInt32(ref _unknownInt12); // 0
+            reader.PersistUInt32(ref _unknownInt13); // 0
+            reader.PersistBoolean(ref _unknownBool3);
+            reader.PersistBoolean(ref _unknownBool4);
+            reader.PersistBoolean(ref _unknownBool5); // 0
+            reader.PersistBoolean(ref _unknownBool6); // 0
+            reader.PersistAsciiString(ref _guardAreaPolygonTriggerName);
+            reader.PersistAsciiString(ref _attackPriorityName);
+            reader.PersistUInt32(ref _unknownInt14); // 0
+            reader.PersistBoolean(ref _unknownBool7);
+            reader.PersistUInt32(ref _unknownInt15); // 0
 
-            var unknown2 = reader.ReadSingle();
-
-            var unknown3 = reader.ReadBytes(16);
-
-            var unknown4 = reader.ReadSingle();
-
-            var unknown5 = reader.ReadUInt32();
-            var unknown6 = reader.ReadUInt32();
-            var unknown7 = reader.ReadUInt32();
-            var unknown8 = reader.ReadUInt32();
-
-            var unknown9 = reader.ReadBytes(31);
-
-            var unknown10 = reader.ReadInt32();
-
-            var unknown11 = reader.ReadBytes(103);
-
-            var locomotorTemplate = reader.ReadBytePrefixedAsciiString();
-
-            var unknown12 = reader.ReadByte();
-            var unknown13 = reader.ReadUInt32();
-
-            var position = reader.ReadVector3();
-
-            for (var i = 0; i < 7; i++)
+            var unknownInt15_1 = 0x7FFFFFFFu;
+            reader.PersistUInt32(ref unknownInt15_1);
+            if (unknownInt15_1 != 0x7FFFFFFF)
             {
-                var unknown14 = reader.ReadSingle();
+                throw new InvalidStateException();
             }
 
-            var unknown15 = reader.ReadBytes(8);
+            reader.PersistBoolean(ref _pathSomething); // This is true on the frame that a unit is moved, and then false on the frame that a path is present
 
-            for (var i = 0; i < 3; i++)
+            var hasPath = _path != null;
+            reader.PersistBoolean(ref hasPath);
+            if (hasPath)
             {
-                var unknown16 = reader.ReadSingle();
+                _path ??= new PathfindingPath();
+                reader.PersistObject(_path);
             }
 
-            var unknown17 = reader.ReadBytes(5);
+            reader.PersistUInt32(ref _unknownInt16);
+            reader.PersistVector3(ref _unknownPosition1);
 
-            var locomotorTemplate2 = reader.ReadBytePrefixedAsciiString();
+            reader.SkipUnknownBytes(12);
 
-            var unknown18 = reader.ReadBytes(36);
+            reader.PersistObjectID(ref _objectToEnter);
+            reader.PersistSingle(ref _unknownFloat2);
+            reader.PersistPoint2D(ref _unknownPos2D1);
+            reader.PersistPoint2D(ref _unknownPos2D2);
+            reader.PersistFrame(ref _unknownFrame1);
+            reader.PersistFrame(ref _unknownFrame2);
+            reader.PersistVector3(ref _unknownPosition2);
+
+            reader.SkipUnknownBytes(1);
+
+            reader.PersistBoolean(ref _unknownBool9);
+            reader.PersistBoolean(ref _unknownBool10);
+
+            reader.SkipUnknownBytes(5);
+
+            reader.PersistBoolean(ref _unknownBool11);
+            reader.PersistBoolean(ref _unknownBool12);
+
+            reader.SkipUnknownBytes(8);
+
+            reader.PersistObjectID(ref _unknownObjectId2);
+
+            reader.SkipUnknownBytes(4);
+
+            reader.PersistObject(_locomotorSet);
+
+            var currentLocomotorTemplateName = CurrentLocomotor?.LocomotorTemplate.Name;
+            reader.PersistAsciiString(ref currentLocomotorTemplateName);
+
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                CurrentLocomotor = currentLocomotorTemplateName != ""
+                    ? _locomotorSet.GetLocomotor(currentLocomotorTemplateName)
+                    : null;
+            }
+
+            reader.PersistUInt32(ref _unknownInt17);
+            if (_unknownInt17 != 0 && _unknownInt17 != 3 && _unknownInt17 != 5 && _unknownInt17 != uint.MaxValue)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistUInt32(ref _unknownInt18); // 0 when unit stationary, 1 when moving
+            reader.PersistVector3(ref _unknownPosition3);
+
+            if (_moduleData.Turret != null)
+            {
+                reader.PersistObject(_turretAIUpdate, "TurretAI");
+            }
+
+            reader.PersistInt32(ref _unknownInt19); // -1, 258
+
+            reader.PersistInt32(ref _unknownInt20);
+            if (_unknownInt20 != 0 && _unknownInt20 != 1 && _unknownInt20 != 2 && _unknownInt20 != -2)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistFrame(ref _unknownFrame3);
+
+            reader.SkipUnknownBytes(4);
         }
     }
 
@@ -271,8 +431,8 @@ namespace OpenSage.Logic.Object
 
         internal static readonly IniParseTable<AIUpdateModuleData> FieldParseTable = new IniParseTable<AIUpdateModuleData>
         {
-            { "Turret", (parser, x) => x.Turret = TurretAIData.Parse(parser) },
-            { "AltTurret", (parser, x) => x.AltTurret = TurretAIData.Parse(parser) },
+            { "Turret", (parser, x) => x.Turret = TurretAIUpdateModuleData.Parse(parser) },
+            { "AltTurret", (parser, x) => x.AltTurret = TurretAIUpdateModuleData.Parse(parser) },
             { "TurretsLinked", (parser, x) => x.TurretsLinked = parser.ParseBoolean() },
             { "AutoAcquireEnemiesWhenIdle", (parser, x) => x.AutoAcquireEnemiesWhenIdle = parser.ParseEnumBitArray<AutoAcquireEnemiesType>() },
             { "MoodAttackCheckRate", (parser, x) => x.MoodAttackCheckRate = parser.ParseInteger() },
@@ -295,12 +455,12 @@ namespace OpenSage.Logic.Object
         };
 
         /// <summary>
-        /// Allows the use of TurretMoveStart and TurretMoveLoop within the UnitSpecificSounds 
+        /// Allows the use of TurretMoveStart and TurretMoveLoop within the UnitSpecificSounds
         /// section of the object.
         /// </summary>
-        public TurretAIData Turret { get; private set; }
+        public TurretAIUpdateModuleData Turret { get; private set; }
 
-        public TurretAIData AltTurret { get; private set; }
+        public TurretAIUpdateModuleData AltTurret { get; private set; }
 
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public bool TurretsLinked { get; private set; }
@@ -356,12 +516,7 @@ namespace OpenSage.Logic.Object
         [AddedIn(SageGame.Bfme2)]
         public int BurningDeathTime { get; private set; }
 
-        internal sealed override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
-        {
-            throw new InvalidOperationException();
-        }
-
-        internal virtual AIUpdate CreateAIUpdate(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
             return new AIUpdate(gameObject, this);
         }
@@ -399,5 +554,48 @@ namespace OpenSage.Logic.Object
     public sealed class UnitAITargetChooserData : BaseAITargetChooserData
     {
 
+    }
+
+    internal sealed class PathfindingPath : IPersistableObject
+    {
+        private readonly List<PathPoint> _points = new();
+        private bool _unknownBool1;
+        private uint _unknownInt2;
+        private bool _unknownBool2;
+
+        public void Persist(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.PersistListWithUInt32Count(
+                _points,
+                static (StatePersister persister, ref PathPoint item) =>
+                {
+                    persister.PersistObjectValue(ref item);
+                });
+
+            reader.PersistBoolean(ref _unknownBool1);
+            reader.SkipUnknownBytes(4);
+            reader.PersistUInt32(ref _unknownInt2); // 1
+            reader.PersistBoolean(ref _unknownBool2);
+        }
+    }
+
+    internal struct PathPoint : IPersistableObject
+    {
+        private uint _id;
+        private Vector3 _position;
+        private uint _unknownInt1;
+        private bool _unknownBool1;
+        private uint _nextId;
+
+        public void Persist(StatePersister reader)
+        {
+            reader.PersistUInt32(ref _id);
+            reader.PersistVector3(ref _position);
+            reader.PersistUInt32(ref _unknownInt1);
+            reader.PersistBoolean(ref _unknownBool1);
+            reader.PersistUInt32(ref _nextId);
+        }
     }
 }

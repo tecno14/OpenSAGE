@@ -1,9 +1,9 @@
 ﻿using OpenSage.Data.Ini;
-using OpenSage.Mathematics.FixedMath;
+using FixedMath.NET;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class MaxHealthUpgrade : UpgradeModule
+    internal sealed class MaxHealthUpgrade : UpgradeModule
     {
         private readonly MaxHealthUpgradeModuleData _moduleData;
 
@@ -13,26 +13,31 @@ namespace OpenSage.Logic.Object
             _moduleData = moduleData;
         }
 
-        internal override void OnTrigger(BehaviorUpdateContext context, bool triggered)
+        protected override void OnUpgrade()
         {
-            if (triggered)
+            switch (_moduleData.ChangeType)
             {
-                switch (_moduleData.ChangeType)
-                {
-                    case MaxHealthChangeType.PreserveRatio:
-                        var ratio = _gameObject.Body.Health / _gameObject.Body.MaxHealth;
-                        _gameObject.Body.Health += ratio * (Fix64) _moduleData.AddMaxHealth;
-                        break;
-                    case MaxHealthChangeType.AddCurrentHealthToo:
-                        _gameObject.Body.Health += (Fix64) _moduleData.AddMaxHealth;
-                        break;
-                    case MaxHealthChangeType.SameCurrentHealth:
-                        // Don't add any new health
-                        break;
-                }
-
-                _gameObject.Body.MaxHealth += (Fix64) _moduleData.AddMaxHealth;
+                case MaxHealthChangeType.PreserveRatio:
+                    _gameObject.Health += _gameObject.HealthPercentage * (Fix64) _moduleData.AddMaxHealth;
+                    break;
+                case MaxHealthChangeType.AddCurrentHealthToo:
+                    _gameObject.Health += (Fix64) _moduleData.AddMaxHealth;
+                    break;
+                case MaxHealthChangeType.SameCurrentHealth:
+                    // Don't add any new health
+                    break;
             }
+
+            _gameObject.MaxHealth += (Fix64) _moduleData.AddMaxHealth;
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
         }
     }
 

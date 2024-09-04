@@ -3,43 +3,41 @@ using System.Linq;
 using System.Numerics;
 using OpenSage.Content.Loaders;
 using OpenSage.Graphics.Cameras;
-using OpenSage.Graphics.Rendering;
 using OpenSage.Graphics.Shaders;
 using OpenSage.Gui;
 using OpenSage.Gui.DebugUI;
 using OpenSage.Mathematics;
+using OpenSage.Rendering;
 using OpenSage.Utilities.Extensions;
 using Veldrid;
 
 namespace OpenSage.Terrain.Roads
 {
-    public sealed class Road : DisposableBase
+    public sealed class Road : RenderObject
     {
-        private readonly string _debugName;
-
         private readonly DeviceBuffer _vertexBuffer;
-        private readonly BoundingBox _boundingBox;
 
         private readonly DeviceBuffer _indexBuffer;
         private readonly uint _numIndices;
 
-        private readonly ShaderSet _shaderSet;
-        private readonly Pipeline _pipeline;
-        private readonly ResourceSet _resourceSet;
-
-        private readonly BeforeRenderDelegate _beforeRender;
+        private readonly Material _material;
 
 #if DEBUG
         private readonly List<(Vector3 start, Vector3 end)> _debugLines;
 #endif
 
+        public override string DebugName { get; }
+
+        public override MaterialPass MaterialPass { get; }
+
+        public override AxisAlignedBoundingBox BoundingBox { get; }
+
         internal Road(
             AssetLoadContext loadContext,
             HeightMap heightMap,
-            RoadNetwork network,
-            ResourceSet radiusCursorDecalsResourceSet)
+            RoadNetwork network)
         {
-            _debugName = network.Template.Name;
+            DebugName = $"Road_{network.Template.Name}";
 
             var vertices = new List<RoadShaderResources.RoadVertex>();
             var indices = new List<ushort>();
@@ -50,7 +48,7 @@ namespace OpenSage.Terrain.Roads
                 mesher.GenerateMesh(heightMap, vertices, indices);
             }
 
-            _boundingBox = BoundingBox.CreateFromPoints(vertices.Select(x => x.Position));
+            BoundingBox = AxisAlignedBoundingBox.CreateFromPoints(vertices.Select(x => x.Position));
 
             _vertexBuffer = AddDisposable(loadContext.GraphicsDevice.CreateStaticBuffer(
                 vertices.ToArray(),
@@ -62,18 +60,9 @@ namespace OpenSage.Terrain.Roads
                 indices.ToArray(),
                 BufferUsage.IndexBuffer));
             
-            _shaderSet = loadContext.ShaderResources.Road.ShaderSet;
-            _pipeline = loadContext.ShaderResources.Road.Pipeline;
+            _material = loadContext.ShaderResources.Road.GetMaterial(network.Template.Texture.Value);
 
-            // TODO: Cache these resource sets in some sort of scoped data context.
-            _resourceSet = AddDisposable(loadContext.ShaderResources.Road.CreateMaterialResourceSet(network.Template.Texture.Value));
-
-            _beforeRender = (cl, context) =>
-            {
-                cl.SetGraphicsResourceSet(4, _resourceSet);
-                cl.SetGraphicsResourceSet(5, radiusCursorDecalsResourceSet);
-                cl.SetVertexBuffer(0, _vertexBuffer);
-            };
+            MaterialPass = new MaterialPass(_material, null);
 
 #if DEBUG
             _debugLines = new List<(Vector3 start, Vector3 end)>();
@@ -90,18 +79,13 @@ namespace OpenSage.Terrain.Roads
 #endif
         }
 
-        internal void BuildRenderList(RenderList renderList)
+        public override void Render(CommandList commandList)
         {
-            renderList.Road.RenderItems.Add(new RenderItem(
-                _debugName,
-                _shaderSet,
-                _pipeline,
-                _boundingBox,
-                Matrix4x4.Identity,
-                0,
-                _numIndices,
-                _indexBuffer,
-                _beforeRender));
+            commandList.SetVertexBuffer(0, _vertexBuffer);
+
+            commandList.SetIndexBuffer(_indexBuffer, IndexFormat.UInt16);
+
+            commandList.DrawIndexed(_numIndices, 1, 0, 0, 0);
         }
 
         internal void DebugDraw(DrawingContext2D context, Camera camera)

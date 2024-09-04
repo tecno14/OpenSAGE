@@ -3,8 +3,10 @@ using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class DefaultProductionExitUpdate : UpdateModule, IProductionExit
+    public sealed class DefaultProductionExitUpdate : UpdateModule, IHasRallyPoint, IProductionExit
     {
+        public RallyPointManager RallyPointManager { get; } = new();
+
         private readonly DefaultProductionExitUpdateModuleData _moduleData;
 
         internal DefaultProductionExitUpdate(DefaultProductionExitUpdateModuleData moduleData)
@@ -15,6 +17,17 @@ namespace OpenSage.Logic.Object
         Vector3 IProductionExit.GetUnitCreatePoint() => _moduleData.UnitCreatePoint;
 
         Vector3? IProductionExit.GetNaturalRallyPoint() => _moduleData.NaturalRallyPoint;
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistObject(RallyPointManager);
+        }
     }
 
     public sealed class DefaultProductionExitUpdateModuleData : UpdateModuleData

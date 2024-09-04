@@ -206,6 +206,9 @@ namespace OpenSage.Logic.Object
         [IniEnum("DOCKING")]
         Docking,
 
+        [IniEnum("DOCKING_ENDING")]
+        DockingEnding,
+
         [IniEnum("AFLAME")]
         Aflame,
 
@@ -214,6 +217,15 @@ namespace OpenSage.Logic.Object
 
         [IniEnum("BURNED")]
         Burned,
+
+        [IniEnum("WEAPONSET_HERO")]
+        WeaponSetHero,
+
+        [IniEnum("WEAPONSET_VETERAN")]
+        WeaponSetVeteran,
+
+        [IniEnum("WEAPONSET_ELITE")]
+        WeaponSetElite,
 
         [IniEnum("RIDERS_ATTACKING"), AddedIn(SageGame.CncGeneralsZeroHour)]
         RidersAttacking,

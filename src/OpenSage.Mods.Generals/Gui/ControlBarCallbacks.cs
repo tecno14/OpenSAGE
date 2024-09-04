@@ -1,4 +1,5 @@
-﻿using System.Linq;
+﻿using System.IO;
+using System.Linq;
 using OpenSage.Gui;
 using OpenSage.Gui.Wnd;
 using OpenSage.Gui.Wnd.Controls;
@@ -9,6 +10,8 @@ namespace OpenSage.Mods.Generals.Gui
     [WndCallbacks]
     public static class ControlBarCallbacks
     {
+        private const string GeneralsExpPointsWnd = "GeneralsExpPoints.wnd";
+
         public static void W3DCommandBarBackgroundDraw(Control control, DrawingContext2D drawingContext)
         {
 
@@ -25,7 +28,18 @@ namespace OpenSage.Mods.Generals.Gui
                             ((GeneralsControlBar) context.Game.Scene2D.ControlBar).ToggleSize();
                             break;
                         case "ControlBar.wnd:ButtonOptions":
-                            context.WindowManager.PushWindow("Menus/QuitMenu.wnd");
+                            context.WindowManager.PushWindow(Path.Combine("Menus", "QuitMenu.wnd"));
+                            break;
+                        case "ControlBar.wnd:ButtonGeneral":
+                            if (context.WindowManager.TopWindow?.Name == GeneralsExpPointsWnd) {
+                                GeneralsExpPointsCallbacks.SetWindow(null);
+                                context.WindowManager.PopWindow();
+                            } else {
+                                var window = context.WindowManager.PushWindow(GeneralsExpPointsWnd);
+                                window.Name = GeneralsExpPointsWnd;
+                                GeneralsExpPointsCallbacks.SetWindow(window);
+                            }
+
                             break;
                     }
                     break;
@@ -40,7 +54,7 @@ namespace OpenSage.Mods.Generals.Gui
                 return;
             }
 
-            var terrainPosition = context.Game.Scene3D.Radar.RadarToWorldSpace(
+            var terrainPosition = context.Game.Scene3D.RadarDrawUtil.RadarToWorldSpace(
                 message.MousePosition,
                 control.ClientRectangle);
 
@@ -65,7 +79,7 @@ namespace OpenSage.Mods.Generals.Gui
 
         public static void W3DLeftHUDDraw(Control control, DrawingContext2D drawingContext)
         {
-            control.Window.Game.Scene3D.Radar.Draw(
+            control.Window.Game.Scene3D.RadarDrawUtil.Draw(
                 drawingContext,
                 control.ClientRectangle);
         }

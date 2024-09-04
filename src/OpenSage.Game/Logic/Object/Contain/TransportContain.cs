@@ -1,65 +1,136 @@
-﻿using System.Collections.Generic;
-using System.IO;
+﻿#nullable enable
+
+using System.Collections.Generic;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
     public class TransportContain : OpenContainModule
     {
-        // TODO
+        public override int TotalSlots => _moduleData.Slots;
 
-        internal override void Load(BinaryReader reader)
+        private readonly TransportContainModuleData _moduleData;
+
+        private LogicFrame _nextEvacAllowedAfter; // unsure if this is correct, but seems plausible from testing?
+
+        internal TransportContain(GameObject gameObject, GameContext gameContext, TransportContainModuleData moduleData): base(gameObject, gameContext, moduleData)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
+            _moduleData = moduleData;
+
+            var payload = moduleData.InitialPayload;
+            if (payload != null)
             {
-                throw new InvalidDataException();
+                for (var i = 0; i < payload.Count; i++)
+                {
+                    var unit = gameObject.GameContext.GameLogic.CreateObject(payload.Object.Value, gameObject.Owner);
+                    Add(unit, true);
+                }
+            }
+        }
+
+        public override int SlotValueForUnit(GameObject unit)
+        {
+            return unit.Definition.TransportSlotCount;
+        }
+
+        private protected override void UpdateModuleSpecific(BehaviorUpdateContext context)
+        {
+            if (_moduleData.HealthRegenPercentPerSecond != 0)
+            {
+                HealUnits(100_000 / _moduleData.HealthRegenPercentPerSecond); // (100% / regenpercentpersecond) * 1000ms
             }
 
+            var isLoaded = ContainedObjectIds.Count > 0;
+            GameObject.ModelConditionFlags.Set(ModelConditionFlag.Loaded, isLoaded);
+        }
+
+        protected override bool TryAssignExitPath(GameObject unit)
+        {
+            if (_moduleData.NumberOfExitPaths > 0)
+            {
+                var startBoneName = ExitBoneStartName;
+                var endBoneName = ExitBoneEndName;
+
+                // from the inis:
+                // Set 0 to not use ExitStart/ExitEnd, set higher than 1 to use ExitStart01-nn/ExitEnd01-nn
+                if (_moduleData.NumberOfExitPaths > 1)
+                {
+                    // testing with a humvee, evacuating individually, the units never use the same exit path
+                    // using the evac command, two pairs of rangers will share an exit path, and the 5th ranger will use a 3rd exit path
+                    // todo: this doesn't seem to be strictly random, but it's unclear how this works at the moment
+                    var pathToChoose = GameObject.GameContext.Random.Next(1, _moduleData.NumberOfExitPaths + 1);
+                    startBoneName = $"{startBoneName}{pathToChoose:00}";
+                    endBoneName = $"{endBoneName}{pathToChoose:00}";
+                }
+
+                var (_, startBone) = GameObject.Drawable.FindBone(startBoneName);
+                var (_, endBone) = GameObject.Drawable.FindBone(endBoneName);
+
+                if (startBone == null || endBone == null)
+                {
+                    return false;
+                }
+
+                var startPoint = GameObject.ToWorldspace(startBone.Transform);
+                unit.UpdateTransform(startPoint.Translation, startPoint.Rotation);
+                var exitPoint = GameObject.ToWorldspace(endBone.Transform);
+                unit.AIUpdate.AddTargetPoint(exitPoint.Translation);
+                return true;
+            }
+
+            if (_moduleData.ExitBone == null)
+            {
+                return false;
+            }
+
+            var (_, bone) = GameObject.Drawable.FindBone(_moduleData.ExitBone);
+            if (bone == null)
+            {
+                return false;
+            }
+
+            var spawnPoint = GameObject.ToWorldspace(bone.Transform);
+            unit.UpdateTransform(spawnPoint.Translation, spawnPoint.Rotation);
+
+            return true;
+        }
+
+        protected override bool TryEvacUnit(LogicFrame currentFrame, uint unitId)
+        {
+            if (_nextEvacAllowedAfter < currentFrame)
+            {
+                RemoveUnit(unitId);
+                if (_moduleData.ExitDelay > 0)
+                {
+                    // todo: humvee had DOOR_1_CLOSING ModelConditionFlag when between exits and DOOR_1_OPENING before first exit
+                    var exitDelayFrames = _moduleData.ExitDelay / 1000f * Game.LogicFramesPerSecond;
+                    _nextEvacAllowedAfter = currentFrame + new LogicFrameSpan((uint)exitDelayFrames);
+                }
+                return true;
+            }
+
+            return false;
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
 
-            var numObjectsInside = reader.ReadUInt32();
-            for (var i = 0; i < numObjectsInside; i++)
+            var unknownInt1 = 1;
+            reader.PersistInt32(ref unknownInt1);
+            if (unknownInt1 != 1)
             {
-                var objectId = reader.ReadUInt32();
+                throw new InvalidStateException();
             }
 
-            var unknown1 = reader.ReadBytes(6);
+            reader.SkipUnknownBytes(1);
 
-            var unknown2 = reader.ReadBytes(13);
-
-            var statusCount = reader.ReadUInt32();
-            for (var i = 0; i < statusCount; i++)
-            {
-                var someStatus = reader.ReadBytePrefixedAsciiString(); // "LOADED"
-            }
-
-            // Where does the 32 come from?
-            for (var i = 0; i < 32; i++)
-            {
-                var someTransform = reader.ReadMatrix4x3Transposed();
-            }
-
-            var unknown3 = reader.ReadInt32(); // -1
-
-            var numObjectsInside2 = reader.ReadUInt32();
-            var capacity = reader.ReadUInt32(); // Maybe
-
-            var unknown4 = reader.ReadBytes(14);
-
-            var unknownCount = reader.ReadUInt16();
-            for (var i = 0; i < unknownCount; i++)
-            {
-                var unknown5 = reader.ReadUInt32();
-                var unknown6 = reader.ReadUInt32();
-            }
-
-            var unknown7 = reader.ReadUInt32();
-            var unknown8 = reader.ReadUInt32();
-
-            var unknown9 = reader.ReadBytes(5);
+            reader.PersistLogicFrame(ref _nextEvacAllowedAfter);
         }
     }
 
@@ -88,6 +159,7 @@ namespace OpenSage.Logic.Object
                 { "ExitBone", (parser, x) => x.ExitBone = parser.ParseBoneName() },
                 { "DestroyRidersWhoAreNotFreeToExit", (parser, x) => x.DestroyRidersWhoAreNotFreeToExit = parser.ParseBoolean() },
                 { "InitialPayload", (parser, x) => x.InitialPayload = Payload.Parse(parser) },
+                { "NumberOfExitPaths", (parser, x) => x.NumberOfExitPaths = parser.ParseInteger() },
                 { "ArmedRidersUpgradeMyWeaponSet", (parser, x) => x.ArmedRidersUpgradeMyWeaponSet = parser.ParseBoolean() },
                 { "WeaponBonusPassedToPassengers", (parser, x) => x.WeaponBonusPassedToPassengers = parser.ParseBoolean() },
                 { "DelayExitInAir", (parser, x) => x.DelayExitInAir = parser.ParseBoolean() },
@@ -126,17 +198,30 @@ namespace OpenSage.Logic.Object
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public bool BurnedDeathToUnits { get; private set; }
 
+        /// <summary>
+        /// Delay between successive exits
+        /// </summary>
         public int ExitDelay { get; private set; }
-        
+
         public bool GoAggressiveOnExit { get; private set; }
+        /// <remarks>
+        /// it seems like there's some default value for DoorOpenTime because
+        /// 1) I was able to pause after starting an evac of a humvee and before anybody left
+        /// 2) the inis have comments about how setting DoorOpenTime to 0 stops the DOOR_1_OPENING/CLOSING flags from being set
+        /// </remarks>
         public int DoorOpenTime { get; private set; }
         public bool ScatterNearbyOnExit { get; private set; }
         public bool OrientLikeContainerOnExit { get; private set; }
         public bool KeepContainerVelocityOnExit { get; private set; }
         public int ExitPitchRate { get; private set; }
-        public string ExitBone { get; private set; }
+        public string? ExitBone { get; private set; }
         public bool DestroyRidersWhoAreNotFreeToExit { get; private set; }
-        public Payload InitialPayload { get; private set; }
+        public Payload? InitialPayload { get; private set; }
+
+        /// <summary>
+        /// Defaults to 1.  Set 0 to not use ExitStart/ExitEnd, set higher than 1 to use ExitStart01-nn/ExitEnd01-nn
+        /// </summary>
+        public int NumberOfExitPaths { get; private set; } = 1;
 
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public bool ArmedRidersUpgradeMyWeaponSet { get; private set; }
@@ -148,10 +233,10 @@ namespace OpenSage.Logic.Object
         public bool DelayExitInAir { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public BitArray<ObjectStatus> ObjectStatusOfContained { get; private set; }
+        public BitArray<ObjectStatus> ObjectStatusOfContained { get; private set; } = new();
 
         [AddedIn(SageGame.Bfme)]
-        public ObjectFilter PassengerFilter { get; private set; }
+        public ObjectFilter PassengerFilter { get; private set; } = new();
 
         [AddedIn(SageGame.Bfme)]
         public bool ShowPips { get; private set; }
@@ -175,7 +260,7 @@ namespace OpenSage.Logic.Object
         public bool KillPassengersOnDeath { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public ObjectFilter ManualPickUpFilter { get; private set; }
+        public ObjectFilter ManualPickUpFilter { get; private set; } = new();
 
         [AddedIn(SageGame.Bfme)]
         public bool EjectPassengersOnDeath { get; private set; }
@@ -184,7 +269,7 @@ namespace OpenSage.Logic.Object
         public bool CanGrabStructure { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public string GrabWeapon { get; private set; }
+        public string? GrabWeapon { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
         public bool FireGrabWeaponOnVictim { get; private set; }
@@ -205,7 +290,7 @@ namespace OpenSage.Logic.Object
         public List<BoneSpecificConditionState> BoneSpecificConditionStates { get; } = new List<BoneSpecificConditionState>();
 
         [AddedIn(SageGame.Bfme2)]
-        public ObjectFilter FadeFilter { get; private set; }
+        public ObjectFilter FadeFilter { get; private set; } = new();
 
         [AddedIn(SageGame.Bfme2)]
         public List<UpgradeCreationTrigger> UpgradeCreationTriggers { get; } = new List<UpgradeCreationTrigger>();
@@ -227,7 +312,7 @@ namespace OpenSage.Logic.Object
 
         internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new TransportContain();
+            return new TransportContain(gameObject, context, this);
         }
     }
 
@@ -242,7 +327,7 @@ namespace OpenSage.Logic.Object
             };
         }
 
-        public string BoneName { get; private set; }
+        public required string BoneName { get; init; }
         public ObjectKinds ObjectKind { get; private set; }
     }
 
@@ -259,8 +344,8 @@ namespace OpenSage.Logic.Object
             };
         }
 
-        public string Upgrade { get; private set; }
-        public string Model { get; private set; }
-        public int Unknown { get; private set; }
+        public required string Upgrade { get; init; }
+        public required string Model { get; init; }
+        public int Unknown { get; init; }
     }
 }

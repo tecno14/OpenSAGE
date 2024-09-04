@@ -1,8 +1,6 @@
-﻿using System.IO;
-using System.Numerics;
+﻿using System.Numerics;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 using OpenSage.FX;
 using OpenSage.Mathematics;
 
@@ -12,6 +10,13 @@ namespace OpenSage.Logic.Object
     {
         private readonly GameObject _gameObject;
         private readonly BezierProjectileBehaviorData _moduleData;
+
+        private uint _launcherObjectId;
+        private uint _targetObjectId;
+        private uint _unknown1;
+        private readonly float[] _unknownFloats = new float[7];
+        private string _weaponThatFiredThis;
+        private uint _unknown2;
 
         internal FXList DetonationFX { get; set; }
 
@@ -76,7 +81,7 @@ namespace OpenSage.Logic.Object
             if (context.GameObject.CurrentWeapon != null)
             {
                 context.GameObject.CurrentWeapon.SetTarget(target);
-                context.GameObject.CurrentWeapon.Fire(context.Time);
+                context.GameObject.CurrentWeapon.Fire();
             }
 
             if (target.TargetType == WeaponTargetType.Position)
@@ -89,34 +94,35 @@ namespace OpenSage.Logic.Object
 
             if (detonateCallsKill)
             {
-                context.GameObject.Kill(DeathType.Detonated, context.Time);
+                context.GameObject.Kill(DeathType.Detonated);
             }
             else
             {
-                context.GameObject.Die(DeathType.Detonated, context.Time);
+                context.GameObject.Die(DeathType.Detonated);
             }
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
 
-            var unknown1 = reader.ReadBytes(12);
+            reader.PersistObjectID(ref _launcherObjectId);
+            reader.PersistObjectID(ref _targetObjectId);
+            reader.PersistUInt32(ref _unknown1);
 
-            for (var i = 0; i < 7; i++)
-            {
-                var unknown2 = reader.ReadSingle();
-            }
+            reader.PersistArray(
+                _unknownFloats,
+                static (StatePersister persister, ref float item) =>
+                {
+                    persister.PersistSingleValue(ref item);
+                });
 
-            var weaponThatFiredThis = reader.ReadBytePrefixedAsciiString();
-
-            var unknown3 = reader.ReadUInt32();
+            reader.PersistAsciiString(ref _weaponThatFiredThis);
+            reader.PersistUInt32(ref _unknown2);
         }
     }
 

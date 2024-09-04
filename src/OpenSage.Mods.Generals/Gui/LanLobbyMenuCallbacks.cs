@@ -23,21 +23,19 @@ namespace OpenSage.Mods.Generals.Gui
 
         public static void LanLobbyMenuSystem(Control control, WndWindowMessage message, ControlCallbackContext context)
         {
-
             switch (message.MessageType)
             {
                 case WndWindowMessageType.SelectedButton:
-                    logger.Info($"Have message {message.MessageType} for control {message.Element.Name}");
+                    logger.Trace($"Have message {message.MessageType} for control {message.Element.Name}");
                     switch (message.Element.Name)
                     {
                         case "LanLobbyMenu.wnd:ButtonBack":
-                            LeaveLobby(context);
+                            context.Game.LobbyManager.Stop();
                             context.WindowManager.SetWindow(@"Menus\MainMenu.wnd");
                             // TODO: Go back to Multiplayer sub-menu
                             break;
                         case "LanLobbyMenu.wnd:ButtonHost":
-                            context.Game.SkirmishManager = new SkirmishManager.Host(context.Game);
-                            context.WindowManager.SetWindow(@"Menus\LanGameOptionsMenu.wnd");
+                            NetworkUtils.HostGame(context);
                             break;
                         case "LanLobbyMenu.wnd:ButtonJoin":
 
@@ -53,11 +51,7 @@ namespace OpenSage.Mods.Generals.Gui
 
                             var player = (LobbyPlayer)selectedItem.DataItem;
 
-                            logger.Info($"Requesting to join {player.EndPoint}");
-
-                            context.Game.SkirmishManager = new SkirmishManager.Client(context.Game, player.EndPoint);
-
-                            context.WindowManager.SetWindow(@"Menus\LanGameOptionsMenu.wnd");
+                            NetworkUtils.JoinGame(context, player.EndPoint);
                             break;
                         case "LanLobbyMenu.wnd:ButtonDirectConnect":
                             context.WindowManager.SetWindow(@"Menus\NetworkDirectConnect.wnd");
@@ -67,14 +61,8 @@ namespace OpenSage.Mods.Generals.Gui
             }
         }
 
-        private static void LeaveLobby(ControlCallbackContext context)
-        {
-            context.Game.LobbyManager.Stop();
-        }
-
         public static void LanLobbyMenuShutdown(Window window, Game game)
         {
-            game.LobbyManager.Stop();
         }
 
         public static void LanLobbyMenuUpdate(Window window, Game game)
@@ -89,9 +77,11 @@ namespace OpenSage.Mods.Generals.Gui
             // Update players
             var listBoxPlayers = (ListBox) window.Controls.FindControl(ListBoxPlayersPrefix);
 
-            listBoxPlayers.Items = (from player in _game.LobbyManager.Players
-                                    where !player.IsHosting
-                                    select new ListBoxDataItem(player, new[] { player.Username }, listBoxGames.TextColor)).ToArray();
+            var players = from player in _game.LobbyManager.Players
+                          where !player.IsHosting
+                          select new ListBoxDataItem(player, new[] { player.Username }, listBoxGames.TextColor);
+
+            listBoxPlayers.Items = players.ToArray();
         }
 
         private static void ClearPlayerName(object sender, EventArgs args)
@@ -119,12 +109,15 @@ namespace OpenSage.Mods.Generals.Gui
             var textChat = (TextBox) window.Controls.FindControl(TextEntryChatPrefix);
             textChat.Text = string.Empty;
 
-            game.LobbyManager.Start();
+            if (!game.LobbyManager.IsRunning)
+            {
+                game.LobbyManager.Start();
+            }
         }
 
         public static void LanLobbyMenuInput(Control control, WndWindowMessage message, ControlCallbackContext context)
         {
-            logger.Info($"Have message {message.MessageType} for control {control.Name}");
+            logger.Trace($"Have message {message.MessageType} for control {control.Name}");
         }
 
         private static void TextEditPlayerName_OnTextChanged(object sender, string text)

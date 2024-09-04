@@ -9,21 +9,36 @@ namespace OpenSage.Input.Cursors
         private readonly Dictionary<string, Cursor> _cachedCursors;
         private Cursor _currentCursor;
 
-        private readonly GameWindow _window;
         private readonly AssetStore _assetStore;
         private readonly ContentManager _contentManager;
+        private readonly GameWindow _window;
 
-        public CursorManager(GameWindow window, AssetStore assetStore, ContentManager contentManager)
+        public bool IsCursorVisible
+        {
+            set
+            {
+                if (_window != null)
+                {
+                    _window.IsCursorVisible = value;
+                }
+            }
+        }
+
+        public bool IsCursorLocked = false;
+
+        public CursorManager(AssetStore assetStore, ContentManager contentManager, GameWindow window)
         {
             _cachedCursors = new Dictionary<string, Cursor>();
 
-            _window = window;
             _assetStore = assetStore;
             _contentManager = contentManager;
+            _window = window;
         }
 
         public void SetCursor(string cursorName, in TimeInterval time)
         {
+            if (IsCursorLocked) return;
+
             if (!_cachedCursors.TryGetValue(cursorName, out var cursor))
             {
                 var mouseCursor = _assetStore.MouseCursors.GetByName(cursorName);
@@ -38,24 +53,19 @@ namespace OpenSage.Input.Cursors
                     cursorFileName += ".ani";
                 }
 
-                string cursorDirectory;
-                switch (_contentManager.SageGame)
-                {
-                    case SageGame.Cnc3:
-                    case SageGame.Cnc3KanesWrath:
-                        // TODO: Get version number dynamically.
-                        cursorDirectory = Path.Combine("RetailExe", "1.0", "Data", "Cursors");
-                        break;
-
-                    default:
-                        cursorDirectory = Path.Combine("Data", "Cursors");
-                        break;
-                }
+                var cursorDirectory = Path.Combine("Data", "Cursors");
 
                 var cursorFilePath = Path.Combine(cursorDirectory, cursorFileName);
                 var cursorEntry = _contentManager.FileSystem.GetFile(cursorFilePath);
 
-                _cachedCursors[cursorName] = cursor = AddDisposable(new Cursor(cursorEntry, _window));
+                // a few cursors are in all lowercase instead of their normal PascalCase naming
+                if (cursorEntry is null)
+                {
+                    cursorFilePath = Path.Combine(cursorDirectory, cursorFileName.ToLower());
+                    cursorEntry = _contentManager.FileSystem.GetFile(cursorFilePath);
+                }
+
+                _cachedCursors[cursorName] = cursor = AddDisposable(new Cursor(cursorEntry, _window?.WindowScale ?? 1.0f));
             }
 
             if (_currentCursor == cursor)

@@ -1,32 +1,23 @@
-﻿using System;
-using System.ComponentModel;
-using System.IO;
-using System.Linq;
-using System.Net;
-using System.Runtime.CompilerServices;
-using System.Runtime.Serialization.Formatters.Binary;
-using System.Security.Cryptography;
-using System.Text;
+﻿using System.Net;
 using LiteNetLib.Utils;
-using SixLabors.ImageSharp.Processing;
 
 namespace OpenSage.Network
 {
     public enum SkirmishSlotState : byte
     {
-        Closed,
-        Open,
-        Human,
-        EasyArmy,
-        MediumArmy,
-        HardArmy,
+        Open = 0,
+        Closed = 1,
+        EasyArmy = 2,
+        MediumArmy = 3,
+        HardArmy = 4,
+        Human = 5,
     }
 
-    public class SkirmishSlot
+    public class SkirmishSlot : IPersistableObject
     {
-        public SkirmishSlot()
-        {
-        }
+        private int _colorChosen;
+        private int _startPositionChosen;
+        private int _playerTemplateIndexChosen;
 
         public SkirmishSlot(int index)
         {
@@ -63,7 +54,9 @@ namespace OpenSage.Network
 
 
         private string _playerName = string.Empty;
-        public string PlayerName { get
+        public string PlayerName
+        {
+            get
             {
                 return _playerName;
             }
@@ -74,8 +67,8 @@ namespace OpenSage.Network
             }
         }
 
-        private byte _colorIndex;
-        public byte ColorIndex
+        private sbyte _colorIndex;
+        public sbyte ColorIndex
         {
             get
             {
@@ -89,7 +82,9 @@ namespace OpenSage.Network
         }
 
         private byte _factionIndex;
-        public byte FactionIndex { get
+        public byte FactionIndex
+        {
+            get
             {
                 return _factionIndex;
             }
@@ -100,32 +95,39 @@ namespace OpenSage.Network
             }
         }
 
-        private byte _team;
-        public byte Team { get {
-                return _team; }
+        private sbyte _team;
+        public sbyte Team
+        {
+            get
+            {
+                return _team;
+            }
             set
             {
                 IsDirty |= _team != value;
                 _team = value;
-            } }
-
-        private bool _ready;
-        public bool Ready { get
-            {
-                return _ready;
-            } set
-            {
-                IsDirty |= _ready != value;
-                _ready = value;
             }
         }
 
-        public IPEndPoint EndPoint;
+        private byte _startPosition;
+        public byte StartPosition
+        {
+            get
+            {
+                return _startPosition;
+            }
+            set
+            {
+                IsDirty |= _startPosition != value;
+                _startPosition = value;
+            }
+        }
 
-        /// <summary>
-        /// We need this during development to be able to run two games on the same machine.
-        /// </summary>
-        public int ProcessId { get; set; }
+        public bool Ready { get; set; }
+        public bool ReadyUpdated { get; set; }
+
+        public IPEndPoint EndPoint { get; set; }
+        public string ClientId { get; set; }
 
         public bool IsDirty { get; private set; }
 
@@ -136,21 +138,20 @@ namespace OpenSage.Network
 
         public static SkirmishSlot Deserialize(NetDataReader reader)
         {
-            var slot = new SkirmishSlot()
+            var slot = new SkirmishSlot(reader.GetInt())
             {
-                Index = reader.GetInt(),
                 State = (SkirmishSlotState) reader.GetByte(),
-                PlayerName = reader.GetString(),
-                ColorIndex = reader.GetByte(),
+                ColorIndex = reader.GetSByte(),
                 FactionIndex = reader.GetByte(),
-                Team = reader.GetByte(),
-                Ready = reader.GetBool()
+                Team = reader.GetSByte(),
+                StartPosition = reader.GetByte(),
             };
 
             if (slot.State == SkirmishSlotState.Human)
             {
+                slot.ClientId = reader.GetString();
+                slot.PlayerName = reader.GetString();
                 slot.EndPoint = reader.GetNetEndPoint();
-                slot.ProcessId = reader.GetInt();
             }
 
             return slot;
@@ -160,16 +161,51 @@ namespace OpenSage.Network
         {
             writer.Put(slot.Index);
             writer.Put((byte) slot.State);
-            writer.Put(slot.PlayerName);
             writer.Put(slot.ColorIndex);
             writer.Put(slot.FactionIndex);
             writer.Put(slot.Team);
-            writer.Put(slot.Ready);
+            writer.Put(slot.StartPosition);
             if (slot.State == SkirmishSlotState.Human)
             {
+                writer.Put(slot.ClientId);
+                writer.Put(slot.PlayerName);
                 writer.Put(slot.EndPoint);
-                writer.Put(slot.ProcessId);
             }
+        }
+
+        public void Persist(StatePersister reader)
+        {
+            reader.PersistEnum(ref _state);
+            reader.PersistUnicodeString(ref _playerName);
+
+            ushort unknown1 = 1;
+            reader.PersistUInt16(ref unknown1);
+            if (unknown1 != 1)
+            {
+                throw new InvalidStateException();
+            }
+
+            int colorIndex = ColorIndex;
+            reader.PersistInt32(ref colorIndex);
+            ColorIndex = (sbyte)colorIndex;
+
+            int startPosition = StartPosition;
+            reader.PersistInt32(ref startPosition);
+            StartPosition = (byte)startPosition;
+
+            // Bit ugly... this is really an index into player templates,
+            // but FactionIndex only counts playable sides... and also is 1-based.
+            int factionIndex = FactionIndex;
+            reader.PersistInt32(ref factionIndex);
+            FactionIndex = (byte)(factionIndex - 1);
+
+            int team = Team;
+            reader.PersistInt32(ref team);
+            Team = (sbyte)team;
+
+            reader.PersistInt32(ref _colorChosen);
+            reader.PersistInt32(ref _startPositionChosen);
+            reader.PersistInt32(ref _playerTemplateIndexChosen);
         }
     }
 }

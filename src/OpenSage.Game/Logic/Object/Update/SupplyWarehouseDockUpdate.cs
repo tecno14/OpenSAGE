@@ -22,6 +22,10 @@ namespace OpenSage.Logic.Object
             if (_currentBoxes > 0)
             {
                 _currentBoxes--;
+
+                var boxPercentage = (float)_currentBoxes / _moduleData.StartingBoxes;
+                _gameObject.Drawable.SetSupplyBoxesRemaining(boxPercentage);
+
                 return true;
             }
             return false;
@@ -31,10 +35,21 @@ namespace OpenSage.Logic.Object
         {
             base.Update(context);
 
-            if (_currentBoxes <= 0)
+            if (_currentBoxes <= 0 && _moduleData.DeleteWhenEmpty)
             {
-                _gameObject.Die(DeathType.Normal, context.Time);
+                _gameObject.Die(DeathType.Normal);
             }
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistInt32(ref _currentBoxes);
         }
     }
 

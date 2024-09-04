@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Numerics;
 
 namespace OpenSage.Mathematics
 {
@@ -40,6 +41,16 @@ namespace OpenSage.Mathematics
         }
 
         /// <summary>
+        /// Initializes a new instance of <see cref="Size"/>.
+        /// </summary>
+        /// <param name="vector">Value for the width and height components.</param>
+        public Size(Vector2 vector)
+        {
+            Width = (int) vector.X;
+            Height = (int) vector.Y;
+        }
+
+        /// <summary>
         /// Tests for equality.
         /// </summary>
         public bool Equals(Size other)
@@ -48,7 +59,7 @@ namespace OpenSage.Mathematics
         }
 
         /// <inheritdoc />
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
             if (ReferenceEquals(null, obj)) return false;
             return obj is Size && Equals((Size) obj);
@@ -80,5 +91,7 @@ namespace OpenSage.Mathematics
         }
 
         public SizeF ToSizeF() => new SizeF(Width, Height);
+
+        public Vector2 ToVector2() => new Vector2(Width, Height);
     }
 }

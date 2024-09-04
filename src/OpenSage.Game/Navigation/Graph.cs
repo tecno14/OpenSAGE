@@ -1,11 +1,16 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Numerics;
+using OpenSage.Graphics.Cameras;
+using OpenSage.Gui;
+using OpenSage.Mathematics;
 using Priority_Queue;
 
 namespace OpenSage.Navigation
 {
     public class Graph
     {
-        readonly Node[,] _nodes;
+        private readonly Node[,] _nodes;
 
         public int Width => _nodes.GetLength(0);
         public int Height => _nodes.GetLength(1);
@@ -118,6 +123,22 @@ namespace OpenSage.Navigation
             }
 
             return null;
+        }
+
+        public void DebugDraw(DrawingContext2D context, Camera camera, Func<Node, Vector2> getNodePosition, Func<float, float, float> getHeight)
+        {
+            foreach (var node in _nodes)
+            {
+                if (node.IsPassable) continue;
+
+                var xy = getNodePosition(node);
+                var xyz = new Vector3(xy, getHeight(xy.X, xy.Y));
+                
+                if (!camera.BoundingFrustum.Contains(xyz)) continue;
+
+                var xy_screen = camera.WorldToScreenPoint(xyz).Vector2XY();
+                context.DrawRectangle(new RectangleF(xy_screen, new SizeF(10.0f)), ColorRgbaF.Red, 1.0f);
+            }
         }
     }
 }

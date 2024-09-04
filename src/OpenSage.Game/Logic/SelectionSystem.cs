@@ -1,6 +1,6 @@
 ﻿using System;
-using System.Linq;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
 using OpenSage.Gui;
 using OpenSage.Logic.Object;
@@ -24,20 +24,32 @@ namespace OpenSage.Logic
         // This should probably scale with resolution.
         private const int BoxSelectionMinimumSize = 30;
 
+        // TODO: consider allowing configuration for accessibility
+        // time after which releasing right click will not result in deselecting units, in ms
+        private const int DeselectMaxTimeMs = 250;
+
+        // TODO: scale with resolution, allow configuration for accessibility
+        // if the cursor moves further than this, don't deselect no matter how short right click was held for
+        private const int DeselectMaxDelta = 5;
+
         private SelectionGui SelectionGui => Game.Scene3D.SelectionGui;
 
-        private Point2D _startPoint;
-        private Point2D _endPoint;
+        private Point2D _selectionStartPoint;
+        private Point2D _selectionEndPoint;
+
+        private Point2D _panStartPoint;
+        private TimeSpan _panStartTime;
 
         public SelectionStatus Status { get; private set; } = SelectionStatus.NotSelecting;
         public bool Selecting => Status != SelectionStatus.NotSelecting;
+        public bool Panning { get; private set; }
 
         private Rectangle SelectionRect
         {
             get
             {
-                var topLeft = Point2D.Min(_startPoint, _endPoint);
-                var bottomRight = Point2D.Max(_startPoint, _endPoint);
+                var topLeft = Point2D.Min(_selectionStartPoint, _selectionEndPoint);
+                var bottomRight = Point2D.Max(_selectionStartPoint, _selectionEndPoint);
 
                 return new Rectangle(topLeft,
                     new Size(bottomRight.X - topLeft.X, bottomRight.Y - topLeft.Y));
@@ -46,22 +58,48 @@ namespace OpenSage.Logic
 
         public SelectionSystem(Game game) : base(game) { }
 
+        public void OnStartRightClickDrag(Point2D point)
+        {
+            Panning = true;
+            _panStartPoint = point;
+            _panStartTime = Game.MapTime.TotalTime;
+        }
+
+        public void OnEndRightClickDrag(Point2D point2D)
+        {
+            var selectionDelta = point2D - _panStartPoint;
+            var time = Game.MapTime.TotalTime - _panStartTime;
+            if (time.Milliseconds < DeselectMaxTimeMs &&
+                Math.Abs(selectionDelta.X) < DeselectMaxDelta && Math.Abs(selectionDelta.Y) < DeselectMaxDelta)
+            {
+                ClearSelectedObjectsForLocalPlayer();
+            }
+
+            Panning = false;
+        }
+
         public void OnHoverSelection(Point2D point)
         {
+            // We might not have a local player. E.g. shellmap/replay
+            if (Game.Scene3D.LocalPlayer == null)
+            {
+                return;
+            }
+
             Game.Scene3D.LocalPlayer.HoveredUnit = FindClosestObject(point.ToVector2());
         }
 
         public void OnStartDragSelection(Point2D startPoint)
         {
             Status = SelectionStatus.SingleSelecting;
-            _startPoint = startPoint;
-            _endPoint = startPoint;
+            _selectionStartPoint = startPoint;
+            _selectionEndPoint = startPoint;
             SelectionGui.SelectionRectangle = SelectionRect;
         }
 
         public void OnDragSelection(Point2D point)
         {
-            _endPoint = point;
+            _selectionEndPoint = point;
 
             var rect = SelectionRect;
 
@@ -93,15 +131,15 @@ namespace OpenSage.Logic
             Status = SelectionStatus.NotSelecting;
         }
 
-        public void SetSelectedObjects(Player player, GameObject[] objects, bool playAudio = true)
+        public void SetSelectedObjects(Player player, GameObject[] objects, bool playAudio = true, bool clearExistingSelection = true)
         {
-            player.SelectUnits(objects);
+            player.SelectUnits(objects, !clearExistingSelection);
 
             if (player == Game.Scene3D.LocalPlayer)
             {
                 if (CanSetRallyPoint(objects))
                 {
-                    Game.OrderGenerator.ActiveGenerator = new RallyPointOrderGenerator();
+                    Game.OrderGenerator.ActiveGenerator = new RallyPointOrderGenerator(Game);
                 }
                 else
                 {
@@ -154,17 +192,27 @@ namespace OpenSage.Logic
             var closestDepth = float.MaxValue;
             GameObject closestObject = null;
 
-            foreach (var gameObject in Game.Scene3D.GameObjects.Items)
+            foreach (var gameObject in Game.Scene3D.GameObjects.Objects)
             {
-                if (!gameObject.IsSelectable || gameObject.Collider == null)
+                if (!gameObject.IsSelectable ||
+                    gameObject.RoughCollider == null ||
+                    !gameObject.RoughCollider.Intersects(ray, out _))
                 {
                     continue;
                 }
 
-                if (gameObject.Collider.Intersects(ray, out var depth) && depth < closestDepth)
+                foreach (var collider in gameObject.Colliders)
                 {
-                    closestDepth = depth;
-                    closestObject = gameObject;
+                    if (!collider.Intersects(ray, out var depth))
+                    {
+                        continue;
+                    }
+                    if (closestObject != null && !gameObject.IsStructure && closestObject.IsStructure ||
+                        depth < closestDepth)
+                    {
+                        closestDepth = depth;
+                        closestObject = gameObject;
+                    }
                 }
             }
 
@@ -173,15 +221,14 @@ namespace OpenSage.Logic
 
         private void SingleSelect()
         {
-            var closestObject = FindClosestObject(_startPoint.ToVector2());
+            var closestObject = FindClosestObject(_selectionStartPoint.ToVector2());
 
             var playerId = Game.Scene3D.GetPlayerIndex(Game.Scene3D.LocalPlayer);
             Game.NetworkMessageBuffer?.AddLocalOrder(Order.CreateClearSelection(playerId));
 
             if (closestObject != null)
             {
-                var objectId = (uint) Game.Scene3D.GameObjects.GetObjectId(closestObject);
-                Game.NetworkMessageBuffer?.AddLocalOrder(Order.CreateSetSelection(playerId, objectId));
+                Game.NetworkMessageBuffer?.AddLocalOrder(Order.CreateSetSelection(playerId, closestObject.ID));
             }
         }
 
@@ -192,10 +239,10 @@ namespace OpenSage.Logic
 
             uint? structure = null;
 
-            // TODO: Optimize with frustum culling?
-            foreach (var gameObject in Game.Scene3D.GameObjects.Items)
+            // TODO: Optimize with quadtree
+            foreach (var gameObject in Game.Scene3D.GameObjects.Objects)
             {
-                if (!gameObject.IsSelectable || gameObject.Collider == null)
+                if (!gameObject.IsSelectable || gameObject.RoughCollider == null)
                 {
                     continue;
                 }
@@ -206,17 +253,15 @@ namespace OpenSage.Logic
                     continue;
                 }
 
-                if (gameObject.Collider.Intersects(boxFrustum))
+                if (gameObject.RoughCollider.Intersects(boxFrustum))
                 {
-                    var objectId = (uint) Game.Scene3D.GameObjects.GetObjectId(gameObject);
-
                     if (gameObject.Definition.KindOf.Get(ObjectKinds.Structure) == false)
                     {
-                        selectedObjects.Add(objectId);
+                        selectedObjects.Add(gameObject.ID);
                     }
                     else if (gameObject.Definition.KindOf.Get(ObjectKinds.Structure) == true)
                     {
-                        structure ??= objectId;
+                        structure ??= gameObject.ID;
                     }
                 }
             }
@@ -240,7 +285,7 @@ namespace OpenSage.Logic
         {
             var viewport = Game.Viewport;
             var viewportSize = new Vector2(viewport.Width, viewport.Height);
- 
+
             var rectSize = new Vector2(rect.Width, rect.Height);
             var rectSizeHalf = rectSize / 2f;
             var rectCenter = new Vector2(rect.Left, rect.Top) + rectSizeHalf;

@@ -1,32 +1,49 @@
-﻿using System;
+using System;
 using OpenSage.Audio;
+using OpenSage.Client;
+using OpenSage.Content;
 using OpenSage.Content.Loaders;
 using OpenSage.DataStructures;
 using OpenSage.Graphics.ParticleSystems;
+using OpenSage.Logic;
 using OpenSage.Logic.Object;
 
 namespace OpenSage
 {
-    internal sealed class GameContext
+    public sealed class GameContext
     {
-        public readonly AssetLoadContext AssetLoadContext;
+        internal readonly AssetLoadContext AssetLoadContext;
         public readonly AudioSystem AudioSystem;
-        public readonly ParticleSystemManager ParticleSystems;
-        public readonly ObjectCreationListManager ObjectCreationLists;
+        internal readonly ParticleSystemManager ParticleSystems;
+        internal readonly ObjectCreationListManager ObjectCreationLists;
         public readonly Terrain.Terrain Terrain;
         public readonly Navigation.Navigation Navigation;
         public readonly Radar Radar;
 
+        public readonly IGame Game;
+
+        internal GameLogic GameLogic => Game.GameLogic;
+
+        internal GameClient GameClient => Game.GameClient;
+
+        public AssetStore AssetStore => AssetLoadContext.AssetStore;
+
         public readonly Random Random = new Random();
 
-        // TODO: Make this readonly.
-        public GameObjectCollection GameObjects;
-        public readonly Quadtree<GameObject> Quadtree;
+        public LogicFrameSpan GetRandomLogicFrameSpan(LogicFrameSpan min, LogicFrameSpan max)
+        {
+            var value = Random.Next(
+                (int)min.Value,
+                (int)max.Value);
+            return new LogicFrameSpan((uint)value);
+        }
+
+        public readonly IQuadtree<GameObject> Quadtree;
 
         // TODO: This is temporary until Scene3D and GameContext are merged.
         public readonly Scene3D Scene3D;
 
-        public GameContext(
+        internal GameContext(
             AssetLoadContext assetLoadContext,
             AudioSystem audioSystem,
             ParticleSystemManager particleSystems,
@@ -34,8 +51,9 @@ namespace OpenSage
             Terrain.Terrain terrain,
             Navigation.Navigation navigation,
             Radar radar,
-            Quadtree<GameObject> quadtree,
-            Scene3D scene)
+            IQuadtree<GameObject> quadtree,
+            Scene3D scene,
+            IGame game)
         {
             AssetLoadContext = assetLoadContext;
             AudioSystem = audioSystem;
@@ -46,6 +64,7 @@ namespace OpenSage
             Radar = radar;
             Scene3D = scene;
             Quadtree = quadtree;
+            Game = game;
         }
     }
 }

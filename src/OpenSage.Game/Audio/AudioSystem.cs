@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
-using OpenSage.Data;
 using OpenSage.Graphics.Cameras;
+using OpenSage.IO;
 using OpenSage.Logic.Object;
 using SharpAudio;
 using SharpAudio.Codec;
@@ -30,7 +30,7 @@ namespace OpenSage.Audio
 
         public AudioSystem(Game game) : base(game)
         {
-            _engine = AudioEngine.CreateDefault();
+            _engine = AddDisposable(AudioEngine.CreateDefault());
             _3dengine = _engine.Create3DEngine();
             _sources = new List<AudioSource>();
             _cached = new Dictionary<string, AudioBuffer>();
@@ -87,10 +87,9 @@ namespace OpenSage.Audio
         protected override void Dispose(bool disposeManagedResources)
         {
             base.Dispose(disposeManagedResources);
+
             _sources.Clear();
             _cached.Clear();
-
-            _engine.Dispose();
         }
 
         /// <summary>
@@ -140,13 +139,18 @@ namespace OpenSage.Audio
             return sound.AudioFile.Value?.Entry;
         }
 
+        private FileSystemEntry ResolveDialogEventEntry(DialogEvent ev)
+        {
+            return ev.File.Value.Entry;
+        }
+
         /// <summary>
         /// Open a a music/audio file that gets streamed.
         /// </summary>
         public SoundStream GetStream(FileSystemEntry entry)
         {
             // TODO: Use submixer (currently not possible)
-            return new SoundStream(entry.Open(), _engine);
+            return AddDisposable(new SoundStream(entry.Open(), _engine));
         }
 
         public void PlayAudioEvent(string eventName)
@@ -162,31 +166,33 @@ namespace OpenSage.Audio
             PlayAudioEvent(audioEvent);
         }
 
-        private bool ValidateAudioEvent(BaseAudioEventInfo baseAudioEvent)
+        public void DisposeSource(AudioSource source)
         {
-            if (baseAudioEvent == null)
+            if (source == null)
             {
-                return false;
+                return;
             }
 
-            if (!(baseAudioEvent is AudioEvent))
+            if (source.IsPlaying())
             {
-                // TODO
-                return false;
+                source.Stop();
             }
-
-            return true;
+            _sources.Remove(source);
         }
 
-        private AudioSource PlayAudioEventBase(BaseAudioEventInfo baseAudioEvent)
+        private AudioSource PlayAudioEventBase(BaseAudioEventInfo baseAudioEvent, bool looping = false)
         {
-            if (!ValidateAudioEvent(baseAudioEvent))
+            if (baseAudioEvent is not BaseSingleSound audioEvent)
             {
                 return null;
             }
 
-            var audioEvent = baseAudioEvent as AudioEvent;
-            var entry = ResolveAudioEventEntry(audioEvent);
+            var entry = baseAudioEvent switch
+            {
+                AudioEvent ae => ResolveAudioEventEntry(ae),
+                DialogEvent de => ResolveDialogEventEntry(de),
+                _ => null, // todo
+            };
 
             if (entry == null)
             {
@@ -194,7 +200,7 @@ namespace OpenSage.Audio
                 return null;
             }
 
-            var source = GetSound(entry, audioEvent.SubmixSlider, audioEvent.Control.HasFlag(AudioControlFlags.Loop));
+            var source = GetSound(entry, audioEvent.SubmixSlider, looping || audioEvent.Control.HasFlag(AudioControlFlags.Loop));
             source.Volume = (float) audioEvent.Volume;
             return source;
         }
@@ -206,44 +212,64 @@ namespace OpenSage.Audio
             _3dengine.SetListenerOrientation(camera.Up, front);
         }
 
-        public void PlayAudioEvent(GameObject emitter, BaseAudioEventInfo baseAudioEvent)
+        public AudioSource PlayAudioEvent(GameObject emitter, BaseAudioEventInfo baseAudioEvent, bool looping = false)
         {
-            var source = PlayAudioEventBase(baseAudioEvent);
+            var source = PlayAudioEventBase(baseAudioEvent, looping);
             if (source == null)
             {
-                return;
+                return null;
             }
 
             // TODO: fix issues with some units
             //_3dengine.SetSourcePosition(source, emitter.Transform.Translation);
             source.Play();
+            return source;
         }
 
-        public void PlayAudioEvent(BaseAudioEventInfo baseAudioEvent)
+        public AudioSource PlayAudioEvent(Vector3 position, BaseAudioEventInfo baseAudioEvent, bool looping = false)
         {
-            var source = PlayAudioEventBase(baseAudioEvent);
+            var source = PlayAudioEventBase(baseAudioEvent, looping);
             if (source == null)
             {
-                return;
+                return null;
+            }
+
+            _3dengine.SetSourcePosition(source, position);
+            source.Play();
+            return source;
+        }
+
+        public AudioSource PlayAudioEvent(BaseAudioEventInfo baseAudioEvent, bool looping = false)
+        {
+            var source = PlayAudioEventBase(baseAudioEvent, looping);
+            if (source == null)
+            {
+                return null;
             }
 
             source.Play();
+            return source;
         }
 
         public void PlayMusicTrack(MusicTrack musicTrack, bool fadeIn, bool fadeOut)
         {
             // TODO: fading
-
-            if (_currentTrack != null)
-            {
-                _currentTrack.Stop();
-                _currentTrack.Dispose();
-            }
+            StopCurrentMusicTrack(fadeOut);
 
             _currentTrackName = musicTrack.Name;
             _currentTrack = GetStream(musicTrack.File.Value.Entry);
             _currentTrack.Volume = (float) musicTrack.Volume;
             _currentTrack.Play();
+        }
+
+        public void StopCurrentMusicTrack(bool fadeOut = false)
+        {
+            // todo: fade out
+            if (_currentTrack != null)
+            {
+                _currentTrack.Stop();
+                _currentTrack.Dispose();
+            }
         }
 
         public int GetFinishedCount(string musicTrackName)

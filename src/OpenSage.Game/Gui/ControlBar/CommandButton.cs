@@ -1,6 +1,7 @@
 ﻿using System;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
+using OpenSage.Logic;
 using OpenSage.Logic.Object;
 using OpenSage.Mathematics;
 
@@ -41,7 +42,7 @@ namespace OpenSage.Gui.ControlBar
             { "MaxShotsToFire", (parser, x) => x.MaxShotsToFire = parser.ParseInteger() },
             { "Object", (parser, x) => x.Object = parser.ParseObjectReference() },
             { "RadiusCursorType", (parser, x) => x.RadiusCursorType = parser.ParseAssetReference() },
-            { "Science", (parser, x) => x.Science = parser.ParseAssetReferenceArray() },
+            { "Science", (parser, x) => x.Science = parser.ParseScienceReferenceArray() },
             { "WeaponSlot", (parser, x) => x.WeaponSlot = parser.ParseEnum<WeaponSlot>() },
             { "UnitSpecificSound", (parser, x) => x.UnitSpecificSound = parser.ParseAssetReference() },
             { "UnitSpecificSound2", (parser, x) => x.UnitSpecificSound2 = parser.ParseAssetReference() },
@@ -60,7 +61,7 @@ namespace OpenSage.Gui.ControlBar
             { "CommandTrigger", (parser, x) => x.CommandTrigger = parser.ParseAssetReference() },
             { "WeaponSlotToggle1", (parser, x) => x.WeaponSlotToggle1 = parser.ParseEnum<WeaponSlot>() },
             { "WeaponSlotToggle2", (parser, x) => x.WeaponSlotToggle2 = parser.ParseEnum<WeaponSlot>() },
-            { "NeededUpgrade", (parser, x) => x.NeededUpgrade = parser.ParseAssetReference() },
+            { "NeededUpgrade", (parser, x) => x.NeededUpgrade = parser.ParseUpgradeReference() },
             { "BuildUpgrades", (parser, x) => x.BuildUpgrades = parser.ParseAssetReference() },
             { "Radial", (parser, x) => x.Radial = parser.ParseBoolean() },
             { "IsClickable", (parser, x) => x.IsClickable = parser.ParseBoolean() },
@@ -86,14 +87,14 @@ namespace OpenSage.Gui.ControlBar
         public CommandType Command { get; private set; }
         public LazyAssetReference<SpecialPower> SpecialPower { get; private set; }
         public LazyAssetReference<UpgradeTemplate> Upgrade { get; private set; }
-        public string[] Science { get; private set; }
-        public BitArray<CommandButtonOption> Options { get; private set; }
+        public LazyAssetReference<Science>[] Science { get; private set; }
+        public BitArray<CommandButtonOption> Options { get; private set; } = new();
         public string TextLabel { get; private set; }
-        
+
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public string ConflictingLabel { get; private set; }
 
-        public LazyAssetReference<MappedImage> ButtonImage { get; private set; }
+        public LazyAssetReference<MappedImage> ButtonImage { get; set; }
         public CommandButtonBorderType ButtonBorderType { get; private set; }
         public string DescriptLabel { get; private set; }
         public string RadiusCursorType { get; private set; }
@@ -110,7 +111,7 @@ namespace OpenSage.Gui.ControlBar
         public LazyAssetReference<ObjectDefinition> Object { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public bool InPalantir { get; private set; }
+        public bool InPalantir { get; set; }
 
         [AddedIn(SageGame.Bfme)]
         public bool DoubleClick { get; private set; }
@@ -152,13 +153,13 @@ namespace OpenSage.Gui.ControlBar
         public WeaponSlot? WeaponSlotToggle2 { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public string NeededUpgrade { get; private set; }
+        public LazyAssetReference<UpgradeTemplate> NeededUpgrade { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
         public string BuildUpgrades { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public bool Radial { get; private set; }
+        public bool Radial { get; set; }
 
         [AddedIn(SageGame.Bfme)]
         public bool IsClickable { get; private set; }

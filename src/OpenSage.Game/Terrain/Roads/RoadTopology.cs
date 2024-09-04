@@ -142,6 +142,8 @@ namespace OpenSage.Terrain.Roads
         {
             Position = position;
         }
+
+        public override string ToString() => Position.ToString();
     }
 
     internal sealed class RoadTopologyEdge
@@ -182,27 +184,24 @@ namespace OpenSage.Terrain.Roads
             Start = End;
             End = temp;
 
-            // swap the end cap flag as well (but not the corner type)
-            var startHadEndCap = StartType.HasFlag(RoadType.EndCap);
-            var endHadEndCap = EndType.HasFlag(RoadType.EndCap);
+            var tempType = StartType;
+            StartType = EndType;
+            EndType = tempType;
 
-            if (endHadEndCap)
-            {
-                StartType |= RoadType.EndCap;
-            }
-            else
-            {
-                StartType &= ~RoadType.EndCap;
-            }
+            // if start and end have different curve types,
+            // remove only the tight curve flag
+            // (this is probably a bug in the original engine)
+            var curveFlags = RoadType.Angled | RoadType.TightCurve;
+            var startCurveType = StartType & curveFlags;
+            var endCurveType = EndType & curveFlags;
 
-            if (startHadEndCap)
+            if (startCurveType != endCurveType)
             {
-                EndType |= RoadType.EndCap;
-            }
-            else
-            {
-                EndType &= ~RoadType.EndCap;
+                StartType &= ~RoadType.TightCurve;
+                EndType &= ~RoadType.TightCurve;
             }
         }
+
+        public override string ToString() => $"{Template.Name}: {Start} -> {End}";
     }
 }

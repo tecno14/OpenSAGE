@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Veldrid" />
+    <PackageReference Include="Veldrid.SPIRV" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSage.Core\OpenSage.Core.csproj" />
+    <ProjectReference Include="..\OpenSage.Mathematics\OpenSage.Mathematics.csproj" />
+  </ItemGroup>
+  
+</Project>

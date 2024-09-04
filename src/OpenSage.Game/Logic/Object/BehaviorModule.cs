@@ -1,75 +1,222 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
-    public abstract class BehaviorModule : DisposableBase
+    public abstract class BehaviorModule : ModuleBase
     {
         internal virtual void Update(BehaviorUpdateContext context) { }
 
-        internal virtual void OnDie(BehaviorUpdateContext context, DeathType deathType) { }
+        internal virtual void OnDie(BehaviorUpdateContext context, DeathType deathType, BitArray<ObjectStatus> status) { }
 
         internal virtual void OnDamageStateChanged(BehaviorUpdateContext context, BodyDamageType fromDamage, BodyDamageType toDamage) { }
 
-        internal virtual void OnCollide(BehaviorUpdateContext context, GameObject collidingObject) { }
-
-        internal virtual void DrawInspector() { }
-
-        internal virtual void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
-            // The following version numbers are probably from 2 extra base classes in the inheritance hierarchy.
-            // Since we don't have that at the moment, just read them here.
+            reader.BeginObject("Base");
 
-            var extraVersion1 = reader.ReadVersion();
-            if (extraVersion1 != 1)
-            {
-                throw new InvalidDataException();
-            }
+            // The following version number is probably from extra base class in the inheritance hierarchy.
+            // Since we don't have that at the moment, just read it here.
+            reader.PersistVersion(1);
 
-            var extraVersion2 = reader.ReadVersion();
-            if (extraVersion2 != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
 
-            //reader.ReadBytes(lengthInBytes - 5);
+            reader.EndObject();
         }
+    }
+
+    public interface IDestroyModule
+    {
+        void OnDestroy();
     }
 
     internal sealed class BehaviorUpdateContext
     {
         public readonly GameContext GameContext;
         public readonly GameObject GameObject;
-        public TimeInterval Time { get; private set; }
+
+        public LogicFrame LogicFrame => GameContext.GameLogic.CurrentFrame;
 
         public BehaviorUpdateContext(
             GameContext gameContext,
-            GameObject gameObject,
-            in TimeInterval time)
+            GameObject gameObject)
         {
             GameContext = gameContext;
             GameObject = gameObject;
-            Time = time;
+        }
+    }
+
+    public readonly struct LogicFrame
+    {
+        public static readonly LogicFrame Zero = default;
+        public static readonly LogicFrame MaxValue = new LogicFrame(uint.MaxValue);
+
+        internal readonly uint Value;
+
+        public LogicFrame(uint value)
+        {
+            Value = value;
         }
 
-        public void UpdateTime(TimeInterval time)
+        public static LogicFrame operator +(LogicFrame left, LogicFrameSpan right)
         {
-            Time = time;
+            return new LogicFrame(left.Value + right.Value);
+        }
+
+        public static LogicFrame operator ++(LogicFrame left)
+        {
+            return new LogicFrame(left.Value + 1);
+        }
+
+        public static LogicFrame operator -(LogicFrame left, LogicFrame right)
+        {
+            return new LogicFrame(left.Value - right.Value);
+        }
+
+        public static bool operator <(LogicFrame left, LogicFrame right)
+        {
+            return left.Value < right.Value;
+        }
+
+        public static bool operator <=(LogicFrame left, LogicFrame right)
+        {
+            return left.Value <= right.Value;
+        }
+
+        public static bool operator >(LogicFrame left, LogicFrame right)
+        {
+            return left.Value > right.Value;
+        }
+
+        public static bool operator >=(LogicFrame left, LogicFrame right)
+        {
+            return left.Value >= right.Value;
+        }
+
+        public override string ToString()
+        {
+            return Value.ToString();
+        }
+    }
+
+    public readonly struct LogicFrameSpan
+    {
+        public static readonly LogicFrameSpan Zero = new LogicFrameSpan(0);
+
+        public static readonly LogicFrameSpan OneSecond = new LogicFrameSpan((uint)Game.LogicFramesPerSecond);
+
+        internal readonly uint Value;
+
+        public LogicFrameSpan(uint value)
+        {
+            Value = value;
+        }
+
+        public static LogicFrameSpan operator +(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return new LogicFrameSpan(left.Value + right.Value);
+        }
+
+        public static LogicFrameSpan operator ++(LogicFrameSpan left)
+        {
+            return new LogicFrameSpan(left.Value + 1);
+        }
+
+        public static LogicFrameSpan operator -(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return new LogicFrameSpan(left.Value - right.Value);
+        }
+
+        public static LogicFrameSpan operator --(LogicFrameSpan left)
+        {
+            return new LogicFrameSpan(left.Value - 1);
+        }
+
+        public static LogicFrameSpan operator *(LogicFrameSpan left, Percentage right)
+        {
+            return new LogicFrameSpan((uint)MathF.Ceiling(left.Value * (float)right));
+        }
+
+        public static LogicFrameSpan operator *(LogicFrameSpan left, float right)
+        {
+            return new LogicFrameSpan((uint)MathF.Ceiling(left.Value * right));
+        }
+
+        public static LogicFrameSpan operator /(LogicFrameSpan left, float right)
+        {
+            return new LogicFrameSpan((uint)MathF.Ceiling(left.Value / right));
+        }
+
+        public static float operator /(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return left.Value / (float)right.Value;
+        }
+
+        public static LogicFrameSpan operator /(LogicFrameSpan left, Percentage right)
+        {
+            return new LogicFrameSpan((uint)MathF.Ceiling(left.Value / (float)right));
+        }
+
+        public static bool operator ==(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return left.Equals(right);
+        }
+
+        public static bool operator !=(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return !(left == right);
+        }
+
+        public static bool operator >(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return left.Value > right.Value;
+        }
+
+        public static bool operator <(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return left.Value < right.Value;
+        }
+
+        public static bool operator >=(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return left.Value >= right.Value;
+        }
+
+        public static bool operator <=(LogicFrameSpan left, LogicFrameSpan right)
+        {
+            return left.Value <= right.Value;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is LogicFrameSpan logicFrameSpan && Equals(logicFrameSpan);
+        }
+
+        private bool Equals(LogicFrameSpan other)
+        {
+            return Value == other.Value;
+        }
+
+        public override int GetHashCode()
+        {
+            return (int)Value;
+        }
+
+        public override string ToString()
+        {
+            return Value.ToString();
         }
     }
 
     public abstract class BehaviorModuleData : ModuleData
     {
-        internal static BehaviorModuleData ParseBehavior(IniParser parser) => ParseModule(parser, BehaviorParseTable);
+        internal static ModuleDataContainer ParseBehavior(IniParser parser, ModuleInheritanceMode inheritanceMode) => ParseModule(parser, BehaviorParseTable, inheritanceMode);
 
         private static readonly Dictionary<string, Func<IniParser, BehaviorModuleData>> BehaviorParseTable = new Dictionary<string, Func<IniParser, BehaviorModuleData>>
         {
@@ -117,7 +264,7 @@ namespace OpenSage.Logic.Object
             { "PoisonedBehavior", PoisonedBehaviorModuleData.Parse },
             { "PropagandaTowerBehavior", PropagandaTowerBehaviorModuleData.Parse },
             { "RailroadBehavior", RailroadBehaviorModuleData.Parse },
-            { "RebuildHoleBehavior", RebuildHoleBehaviorModuleData.Parse },
+            { "RebuildHoleBehavior", RebuildHoleUpdateModuleData.Parse },
             { "ReplenishUnitsBehavior", ReplenishUnitsBehaviorModuleData.Parse },
             { "RunOffMapBehavior", RunOffMapBehaviorModuleData.Parse },
             { "ShareExperienceBehavior", ShareExperienceBehaviorModuleData.Parse },

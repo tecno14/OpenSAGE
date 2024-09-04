@@ -6,7 +6,7 @@ namespace OpenSage.Logic.Object
     /// <summary>
     /// Shows/hides sub-objects on this object's model via upgrading.
     /// </summary>
-    public class SubObjectsUpgrade : UpgradeModule
+    internal class SubObjectsUpgrade : UpgradeModule
     {
         private readonly SubObjectsUpgradeModuleData _moduleData;
 
@@ -15,21 +15,21 @@ namespace OpenSage.Logic.Object
             _moduleData = moduleData;
         }
 
-        internal override void OnTrigger(BehaviorUpdateContext context, bool triggered)
+        protected override void OnUpgrade()
         {
             if (_moduleData.ShowSubObjects != null)
             {
-                foreach (var showSubObject in _moduleData.ShowSubObjects)
+                foreach (var subObject in _moduleData.ShowSubObjects)
                 {
-                    _gameObject.HiddenSubObjects.Remove(showSubObject);
+                    _gameObject.Drawable.ShowSubObject(subObject);
                 }
             }
 
             if (_moduleData.HideSubObjects != null)
             {
-                foreach (var hideSubObject in _moduleData.HideSubObjects)
+                foreach (var subObject in _moduleData.HideSubObjects)
                 {
-                    _gameObject.HiddenSubObjects.Add(hideSubObject);
+                    _gameObject.Drawable.HideSubObject(subObject);
                 }
             }
         }

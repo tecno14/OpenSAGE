@@ -2,6 +2,26 @@
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class RepairDockUpdate : DockUpdate
+    {
+        internal RepairDockUpdate(GameObject gameObject, RepairDockUpdateModuleData moduleData)
+            : base(gameObject, moduleData)
+        {
+
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.SkipUnknownBytes(8);
+        }
+    }
+
     /// <summary>
     /// Hardcoded to require DockWaitingN, DockEndN, DockActionN and DockStartN bones, where N 
     /// should correspond to <see cref="NumberApproachPositions"/>.
@@ -17,5 +37,10 @@ namespace OpenSage.Logic.Object
             });
 
         public int TimeForFullHeal { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new RepairDockUpdate(gameObject, this);
+        }
     }
 }

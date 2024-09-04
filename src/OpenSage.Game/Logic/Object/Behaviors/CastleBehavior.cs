@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using ImGuiNET;
@@ -8,32 +9,44 @@ using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class CastleBehavior : BehaviorModule
+    internal sealed class CastleBehavior : BehaviorModule
     {
         private GameObject _gameObject;
         private CastleBehaviorModuleData _moduleData;
         private GameContext _context;
-        bool _unpacked = false;
-
+        private LogicFrame _waitUntil;
+        private LogicFrameSpan _updateInterval;
         private Player _nativePlayer;
+
+        public bool IsUnpacked { get; set; }
 
         internal CastleBehavior(GameObject gameObject, GameContext context, CastleBehaviorModuleData moduleData)
         {
+            IsUnpacked = false;
             _moduleData = moduleData;
             _gameObject = gameObject;
             _context = context;
-
+            _updateInterval = new LogicFrameSpan((uint)MathF.Ceiling(Game.LogicFramesPerSecond / 2)); // 0.5s
             _nativePlayer = _gameObject.Owner;
+        }
+
+        public float GetUnpackCost(Player player)
+        {
+            var castleEntry = FindCastle(player.Side);
+            return castleEntry.UnpackCost;
         }
 
         public void Unpack(Player player, bool instant = false)
         {
-            if (_unpacked)
+            if (IsUnpacked)
             {
                 return;
             }
 
-            var castleEntry = FindCastle(player.Side);
+            _gameObject.Hidden = true;
+            _gameObject.IsSelectable = false;
+
+            var castleEntry = FindCastle(player.Template.Side);
 
             if (castleEntry != null)
             {
@@ -54,17 +67,12 @@ namespace OpenSage.Logic.Object
                     var angle = viewAngle + castleTemplate.Angle;
                     mapObject.Position = new Vector3(_gameObject.Translation.X, _gameObject.Translation.Y, 0.0f) + offset;
 
-                    var baseObject = GameObject.FromMapObject(
-                        mapObject,
-                        _context.AssetLoadContext.AssetStore,
-                        _context.GameObjects,
-                        _context.Terrain.HeightMap,
-                        false,
-                        angle);
+                    var baseObject = GameObject.FromMapObject(mapObject, _context, false, angle);
 
                     if (!instant)
                     {
-                        baseObject.StartConstruction(_context.Scene3D.Game.MapTime);
+                        baseObject.PrepareConstruction();
+                        baseObject.SetIsBeingConstructed();
                         baseObject.BuildProgress = 0.0f;
                     }
 
@@ -74,42 +82,49 @@ namespace OpenSage.Logic.Object
                     }
                 }
             }
-            _gameObject.Destroy();
-            _unpacked = true;
+            IsUnpacked = true;
         }
 
         internal override void Update(BehaviorUpdateContext context)
         {
-            // TODO: Figure out the other unpack conditions
-            if (!_unpacked)
+            if (IsUnpacked)
             {
-                if (_moduleData.InstantUnpack)
+                // not sure if this is correct, or does any object with BASE_FOUNDATION or BASE_SITE automatically get a FoundationAIUpdate?
+                FoundationAIUpdate.CheckForStructure(context, _gameObject, ref _waitUntil, _updateInterval);
+                return;
+            }
+
+            // TODO: Figure out the other unpack conditions
+            if (_moduleData.InstantUnpack)
+            {
+                Unpack(_gameObject.Owner, instant: true);
+            }
+
+            var nearbyUnits = context.GameContext.Game.PartitionCellManager.QueryObjects(
+                _gameObject,
+                _gameObject.Translation,
+                _moduleData.ScanDistance,
+                new PartitionQueries.TrueQuery());
+
+            if (!nearbyUnits.Any())
+            {
+                _gameObject.Owner = _nativePlayer;
+                return;
+            }
+
+            // TODO: check if all nearby units are from the same owner
+            foreach (var unit in nearbyUnits)
+            {
+                if (unit == _gameObject)
                 {
-                    Unpack(_gameObject.Owner, instant: true);
+                    continue;
                 }
 
-                var nearbyUnits = context.GameContext.Quadtree.FindNearby(_gameObject, _gameObject.Transform, _moduleData.ScanDistance);
-
-                if (nearbyUnits.Count() == 0)
+                var distance = (unit.Translation - _gameObject.Translation).Length();
+                if (distance < _moduleData.ScanDistance)
                 {
-                    _gameObject.Owner = _nativePlayer;
+                    _gameObject.Owner = unit.Owner;
                     return;
-                }
-
-                // TODO: check if all nearby units are from the same owner
-                foreach (var unit in nearbyUnits)
-                {
-                    if (unit == _gameObject)
-                    {
-                        continue;
-                    }
-
-                    var distance = (unit.Translation - _gameObject.Translation).Length();
-                    if (distance < _moduleData.ScanDistance)
-                    {
-                        _gameObject.Owner = unit.Owner;
-                        return;
-                    }
                 }
             }
         }
@@ -118,7 +133,7 @@ namespace OpenSage.Logic.Object
         {
             foreach (var entry in _moduleData.CastleToUnpackForFactions)
             {
-                if (entry.FactionName == side)
+                if (side == entry.FactionName)
                 {
                     return entry;
                 }
@@ -132,7 +147,7 @@ namespace OpenSage.Logic.Object
             //var entry = FindCastle();
 
             //ImGui.LabelText("Camp", entry.Camp);
-            ImGui.LabelText("Unpacked", _unpacked.ToString());
+            ImGui.LabelText("Unpacked", IsUnpacked.ToString());
         }
     }
 
@@ -212,14 +227,14 @@ namespace OpenSage.Logic.Object
             {
                 FactionName = parser.ParseString(),
                 Camp = parser.ParseAssetReference(),
-                MaybeStartMoney = parser.GetFloatOptional()
+                UnpackCost = parser.GetFloatOptional()
             };
             return result;
         }
 
         public string FactionName { get; private set; }
         public string Camp { get; private set; }
-        public float MaybeStartMoney { get; private set; }
+        public float UnpackCost { get; private set; }
     }
 
     public sealed class Side

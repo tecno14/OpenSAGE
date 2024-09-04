@@ -4,7 +4,12 @@ namespace OpenSage.Logic.Object
 {
     public class SupplyTruckAIUpdate : SupplyAIUpdate
     {
-        private SupplyTruckAIUpdateModuleData _moduleData;
+        private readonly SupplyTruckAIUpdateModuleData _moduleData;
+
+        private readonly WorkerAIUpdateStateMachine2 _stateMachine = new();
+        private uint _dockId;
+        private int _unknownInt;
+        private bool _unknownBool;
 
         internal SupplyTruckAIUpdate(GameObject gameObject, SupplyTruckAIUpdateModuleData moduleData) : base(gameObject, moduleData)
         {
@@ -15,16 +20,30 @@ namespace OpenSage.Logic.Object
         {
             base.Update(context);
         }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistObject(_stateMachine);
+            reader.PersistObjectID(ref _dockId);
+            reader.PersistInt32(ref _unknownInt);
+            reader.PersistBoolean(ref _unknownBool);
+        }
     }
 
-    public sealed class SupplyTruckAIUpdateModuleData : SupplyAIUpdateModuleData
+    public class SupplyTruckAIUpdateModuleData : SupplyAIUpdateModuleData
     {
-        internal static new SupplyTruckAIUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
+        internal new static SupplyTruckAIUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
 
-        private static new readonly IniParseTable<SupplyTruckAIUpdateModuleData> FieldParseTable = SupplyAIUpdateModuleData.FieldParseTable
+        internal new static readonly IniParseTable<SupplyTruckAIUpdateModuleData> FieldParseTable = SupplyAIUpdateModuleData.FieldParseTable
             .Concat(new IniParseTable<SupplyTruckAIUpdateModuleData>{});
 
-        internal override AIUpdate CreateAIUpdate(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
             return new SupplyTruckAIUpdate(gameObject, this);
         }

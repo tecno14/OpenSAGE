@@ -1,27 +1,52 @@
-﻿using System.IO;
-using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+﻿using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class BaseRegenerateUpdate : UpdateModule
+    public sealed class BaseRegenerateUpdate : UpdateModule, ISelfHealable
     {
-        // TODO
+        private readonly GameObject _gameObject;
+        private readonly GameContext _context;
 
-        internal override void Load(BinaryReader reader)
+        protected override LogicFrameSpan FramesBetweenUpdates => LogicFrameSpan.OneSecond;
+
+        internal BaseRegenerateUpdate(GameObject gameObject, GameContext context)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            _gameObject = gameObject;
+            _context = context;
+            NextUpdateFrame.Frame = uint.MaxValue;
+        }
 
+        /// <summary>
+        /// Increments the frame after which healing is allowed.
+        /// </summary>
+        public void RegisterDamage()
+        {
+            var currentFrame = _gameObject.GameContext.GameLogic.CurrentFrame;
+            NextUpdateFrame = new UpdateFrame(currentFrame + _context.AssetLoadContext.AssetStore.GameData.Current.BaseRegenDelay);
+        }
+
+        private protected override void RunUpdate(BehaviorUpdateContext context)
+        {
+            _gameObject.HealDirectly(_context.AssetLoadContext.AssetStore.GameData.Current.BaseRegenHealthPercentPerSecond);
+
+            if (_gameObject.IsFullHealth)
+            {
+                NextUpdateFrame.Frame = uint.MaxValue;
+            }
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 
     /// <summary>
-    /// Forces object to auto-repair itself over time. Parameters are defined in GameData.INI 
+    /// Forces object to auto-repair itself over time. Parameters are defined in GameData.INI
     /// through <see cref="GameData.BaseRegenHealthPercentPerSecond"/> and
     /// <see cref="GameData.BaseRegenDelay"/>.
     /// </summary>
@@ -33,7 +58,7 @@ namespace OpenSage.Logic.Object
 
         internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new BaseRegenerateUpdate();
+            return new BaseRegenerateUpdate(gameObject, context);
         }
     }
 }

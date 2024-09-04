@@ -4,11 +4,22 @@ using OpenSage.Mathematics;
 namespace OpenSage.Logic.Object
 {
     [AddedIn(SageGame.Bfme)]
+    public class AnimalAIUpdate : AIUpdate
+    {
+        private readonly AnimalAIUpdateModuleData _moduleData;
+
+        internal AnimalAIUpdate(GameObject gameObject, AnimalAIUpdateModuleData moduleData) : base(gameObject, moduleData)
+        {
+            _moduleData = moduleData;
+        }
+    }
+
+
     public sealed class AnimalAIUpdateModuleData : AIUpdateModuleData
     {
-        internal static new AnimalAIUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
+        internal new static AnimalAIUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
 
-        private static new readonly IniParseTable<AnimalAIUpdateModuleData> FieldParseTable = AIUpdateModuleData.FieldParseTable
+        private new static readonly IniParseTable<AnimalAIUpdateModuleData> FieldParseTable = AIUpdateModuleData.FieldParseTable
             .Concat(new IniParseTable<AnimalAIUpdateModuleData>
             {
                 { "FleeRange", (parser, x) => x.FleeRange = parser.ParseInteger() },
@@ -27,5 +38,10 @@ namespace OpenSage.Logic.Object
         public int MaxWanderRadius { get; private set; }
         public int UpdateTimer { get; private set; }
         public bool AfraidOfCastles { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new AnimalAIUpdate(gameObject, this); ;
+        }
     }
 }

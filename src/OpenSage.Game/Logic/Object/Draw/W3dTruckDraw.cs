@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Numerics;
+using OpenSage.Client;
 using OpenSage.Data.Ini;
-using OpenSage.Graphics;
 using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
@@ -12,8 +12,8 @@ namespace OpenSage.Logic.Object
 
         private readonly (string name, bool affectedBySteering)[] _boneList;
 
-        internal W3dTruckDraw(W3dTruckDrawModuleData data, GameObject gameObject, GameContext context)
-            : base(data, gameObject, context)
+        internal W3dTruckDraw(W3dTruckDrawModuleData data, Drawable drawable, GameContext context)
+            : base(data, drawable, context)
         {
             _data = data;
             _boneList = new[] {
@@ -60,32 +60,44 @@ namespace OpenSage.Logic.Object
                 {
                     continue;
                 }
-
                 boneInstance.AnimatedOffset.Rotation = Quaternion.CreateFromYawPitchRoll(0, 0, yaw);
                 boneInstance.AnimatedOffset.Rotation *= Quaternion.CreateFromYawPitchRoll(MathUtility.ToRadians(roll), 0, 0);
             }
         }
 
-        private ModelBoneInstance FindBoneInstance(string name)
+        public override void UpdateConditionState(BitArray<ModelConditionFlag> flags, Random random)
         {
-            foreach (var bone in ActiveModelInstance.Model.BoneHierarchy.Bones)
+            base.UpdateConditionState(flags, random);
+
+            if (flags.BitsChanged)
             {
-                if (bone.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                for (var i = 0; i < ActiveModelInstance.ModelBoneInstances.Length; i++)
                 {
-                    return ActiveModelInstance.ModelBoneInstances[bone.Index];
+                    var bone = ActiveModelInstance.ModelBoneInstances[i];
+                    if (bone.Name.StartsWith("HEADLIGHT", StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        ActiveModelInstance.BoneVisibilities[i] = flags.Get(ModelConditionFlag.Night);
+                    }
                 }
             }
+        }
 
-            return null;
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
         }
     }
 
     /// <summary>
-    /// Hardcoded to call for the TreadDebrisRight and TreadDebrisLeft (unless overriden) particle 
-    /// system definitions and allows use of TruckPowerslideSound and TruckLandingSound within the 
+    /// Hardcoded to call for the TreadDebrisRight and TreadDebrisLeft (unless overriden) particle
+    /// system definitions and allows use of TruckPowerslideSound and TruckLandingSound within the
     /// UnitSpecificSounds section of the object.
-    /// 
-    /// This module also includes automatic logic for showing and hiding of HEADLIGHT bones in and 
+    ///
+    /// This module also includes automatic logic for showing and hiding of HEADLIGHT bones in and
     /// out of the NIGHT ModelConditionState.
     /// </summary>
     public class W3dTruckDrawModuleData : W3dModelDrawModuleData
@@ -173,9 +185,9 @@ namespace OpenSage.Logic.Object
         [AddedIn(SageGame.Bfme2Rotwk)]
         public RandomTexture RandomTexture { get; private set; }
 
-        internal override DrawModule CreateDrawModule(GameObject gameObject, GameContext context)
+        internal override DrawModule CreateDrawModule(Drawable drawable, GameContext context)
         {
-            return new W3dTruckDraw(this, gameObject, context);
+            return new W3dTruckDraw(this, drawable, context);
         }
     }
 }

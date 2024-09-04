@@ -109,12 +109,24 @@ namespace OpenSage.Gui.DebugUI
 
             if (ShowColliders)
             {
-                foreach (var gameObject in _scene3D.GameObjects.Items)
+                _scene3D.Navigation.DebugDraw(context, camera);
+
+                if (_scene3D.BuildPreviewObject != null)
+                {
+                    _scene3D.BuildPreviewObject.Geometry.DebugDraw(context, camera, _scene3D.BuildPreviewObject);
+                }
+
+                foreach (var gameObject in _scene3D.GameObjects.Objects)
                 {
                     // TODO: Reuse frustum culling results.
-                    if (gameObject.Collider != null && gameObject.Collider.Intersects(camera.BoundingFrustum))
+                    if (gameObject.RoughCollider != null && gameObject.RoughCollider.Intersects(camera.BoundingFrustum))
                     {
-                        gameObject.Collider?.DebugDraw(context, camera);
+                        //if (gameObject.Colliders.Count > 1)
+                        //{
+                        //    gameObject.RoughCollider.DebugDraw(context, camera);
+                        //}
+
+                        gameObject.Geometry.DebugDraw(context, camera, gameObject);
                     }
 
                     var targetPoints = gameObject.AIUpdate?.TargetPoints;
@@ -144,7 +156,7 @@ namespace OpenSage.Gui.DebugUI
 
             if (ShowQuadTree)
             {
-                _scene3D.Quadtree.DebugDraw(context, camera);
+                _scene3D.Game.PartitionCellManager.DebugDraw(context, camera);
             }
 
             if (_scene3D.ShowRoads && ShowRoadMeshes)
@@ -154,20 +166,6 @@ namespace OpenSage.Gui.DebugUI
                     road.DebugDraw(context, camera);
                 }
             }
-
-
-            // display impassable area
-            //foreach(var node in _scene3D.Navigation._graph._nodes)
-            //{
-            //    if (!node.IsPassable)
-            //    {
-            //        var xy = _scene3D.Navigation.GetNodePosition(node);
-            //        var xyz = camera.WorldToScreenPoint(new Vector3(xy, _scene3D.Terrain.HeightMap.GetHeight(xy.X, xy.Y)));
-            //        var pos = xyz.Vector2XY();
-            //        if (pos.X < 0.0 || pos.Y < 0.0 || pos.X > 1920 || pos.Y > 1080) continue;
-            //        context.DrawRectangle(new RectangleF(xyz.Vector2XY(), new SizeF(10.0f)), ColorRgbaF.Red, 10.0f);
-            //    }
-            //}
 
             context.DrawText(_debugStringBuilder.ToString(), _debugFont, TextAlignment.Leading, ColorRgbaF.White, new RectangleF(10, 10, 400, 80));
 

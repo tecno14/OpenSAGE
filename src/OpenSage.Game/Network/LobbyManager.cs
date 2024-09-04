@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Threading;
@@ -15,15 +14,15 @@ namespace OpenSage.Network
         private Game _game;
         private EventBasedNetListener _listener;
         private NetManager _manager;
-        private Thread _thread;
-        private bool _isRunning;
+        private Thread _thread;        
         private NetPacketProcessor _processor;
         private List<LobbyPlayer> _players = new List<LobbyPlayer>();
 
         private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
         public IReadOnlyCollection<LobbyPlayer> Players => _players;
-        public string LocalAddress => NetUtils.GetLocalIp(LocalAddrType.IPv4);
+
+        public bool IsRunning { get; private set; }
 
         public LobbyManager(Game game)
         {
@@ -33,8 +32,7 @@ namespace OpenSage.Network
             _manager = new NetManager(_listener)
             {
                 BroadcastReceiveEnabled = true,
-                ReuseAddress = true,
-                IPv6Enabled = IPv6Mode.Disabled, // TODO: temporary
+                ReuseAddress = true
             };
 
             _processor = new NetPacketProcessor();
@@ -47,18 +45,9 @@ namespace OpenSage.Network
 
         public void Start()
         {
-            if (_game.Configuration.LanIpAddress != IPAddress.Any)
-            {
-                Logger.Trace($"Starting network manager using configured IP Address { _game.Configuration.LanIpAddress }");
-                _manager.Start(_game.Configuration.LanIpAddress, IPAddress.IPv6Any, Ports.LobbyScan); // TODO: what about IPV6
-            }
-            else
-            {
-                Logger.Trace($"Starting network manager using default IP Address.");
-                _manager.Start(Ports.LobbyScan);
-            }
+            _manager.Start(Ports.LobbyScan);
 
-            _isRunning = true;
+            IsRunning = true;
             _thread = new Thread(Loop)
             {
                 IsBackground = true,
@@ -71,31 +60,29 @@ namespace OpenSage.Network
         {
             _manager.Stop();
 
-            _isRunning = false;
-            _thread.Interrupt();
-            _thread.Join();
+            IsRunning = false;
             _thread = null;
         }
 
         private void Loop()
         {
             var writer = new NetDataWriter();
-            var processId = Process.GetCurrentProcess().Id;
 
-            while (_isRunning)
+            var broadcastPacket = new LobbyBroadcastPacket()
             {
-                writer.Reset();
+                ClientId = ClientInstance.Id
+            };
 
-                _processor.Write(writer, new LobbyBroadcastPacket()
-                {
-                    ProcessId = processId,
-                    Username = Username,
-                    IsHosting = _game.SkirmishManager?.IsHosting ?? false,
-                });
+            while (IsRunning)
+            {
+                broadcastPacket.Username = Username;
+                broadcastPacket.IsHosting = _game.SkirmishManager?.IsHosting ?? false;
+
+                writer.Reset();
+                _processor.Write(writer, broadcastPacket);
+                _manager.SendBroadcast(writer, Ports.LobbyScan);
 
                 _manager.PollEvents();
-
-                _manager.SendBroadcast(writer, Ports.LobbyScan);
 
                 var removedCount = _players.RemoveAll(IsTimedOut);
                 if (removedCount > 0)
@@ -103,14 +90,7 @@ namespace OpenSage.Network
                     Logger.Info($"Timeout: Removed {removedCount} players from lobby.");
                 }
 
-                try
-                {
-                    Thread.Sleep(100);
-                }
-                catch (ThreadInterruptedException)
-                {
-                    // Ignore this
-                }
+                Thread.Sleep(100);
             }
 
             bool IsTimedOut(LobbyPlayer player) =>
@@ -127,14 +107,14 @@ namespace OpenSage.Network
 
         private void LobbyBroadcastReceived(LobbyBroadcastPacket packet, IPEndPoint endPoint)
         {
+            var player = _players.FirstOrDefault(p => p.ClientId == packet.ClientId);
 
-            var player = _players.FirstOrDefault(p => p.EndPoint.Equals(endPoint) && p.ProcessId == packet.ProcessId);
             if (player == null)
             {
                 player = new LobbyPlayer()
                 {
                     EndPoint = endPoint,
-                    ProcessId = packet.ProcessId
+                    ClientId = packet.ClientId
                 };
 
                 _players.Add(player);

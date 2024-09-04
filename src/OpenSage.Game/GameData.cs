@@ -16,7 +16,6 @@ namespace OpenSage
             { "ShellMapName", (parser, x) => x.ShellMapName = parser.ParseString() },
             { "MapName", (parser, x) => x.MapName = parser.ParseString() },
             { "MoveHintName", (parser, x) => x.MoveHintName = parser.ParseString() },
-            { "MoveHintZBias", (parser, x) => x.MoveHintZBias = parser.ParseFloat() },
             { "ShowProps", (parser, x) => x.ShowProps = parser.ParseBoolean() },
             { "UseTrees", (parser, x) => x.UseTrees = parser.ParseBoolean() },
             { "UseFPSLimit", (parser, x) => x.UseFpsLimit = parser.ParseBoolean() },
@@ -66,6 +65,7 @@ namespace OpenSage
             { "DefaultUnitHealingBuffFxList", (parser, x) => x.DefaultUnitHealingBuffFxList = parser.ParseAssetReference() },
             { "DefaultStructureRepairBuffFxList", (parser, x) => x.DefaultStructureRepairBuffFxList = parser.ParseAssetReference() },
 
+            { "TimeAfterDamageUntilRepairAllowed", (parser, x) => x.TimeAfterDamageUntilRepairAllowed = parser.ParseInteger() },
             { "DefaultStructureRubbleHeight", (parser, x) => x.DefaultStructureRubbleHeight = parser.ParseFloat() },
 
             { "VertexWaterAvailableMaps1", (parser, x) => x.VertexWaterAvailableMaps1 = parser.ParseString() },
@@ -128,8 +128,6 @@ namespace OpenSage
             { "VertexWaterAttenuationC4", (parser, x) => x.VertexWaterAttenuationC4 = parser.ParseFloat() },
             { "VertexWaterAttenuationRange4", (parser, x) => x.VertexWaterAttenuationRange4 = parser.ParseFloat() },
 
-            { "TimeAfterDamageUntilRepairAllowed", (parser, x) => x.TimeAfterDamageUntilRepairAllowed = parser.ParseInteger() },
-
             { "DownwindAngle", (parser, x) => x.DownwindAngle = parser.ParseFloat() },
             { "DrawSkyBox", (parser, x) => x.DrawSkyBox = parser.ParseBoolean() },
             { "SkyBoxPositionZ", (parser, x) => x.SkyBoxPositionZ = parser.ParseFloat() },
@@ -143,9 +141,6 @@ namespace OpenSage
             { "CameraLockHeightDelta", (parser, x) => x.CameraLockHeightDelta = parser.ParseFloat() },
             { "CameraTerrainSampleRadiusForHeight", (parser, x) => x.CameraTerrainSampleRadiusForHeight = parser.ParseFloat() },
 
-            { "JoypadScrollScalar", (parser, x) => x.JoypadScrollScalar = parser.ParseFloat() },
-            { "CursorMagnetismMode", (parser, x) => x.CursorMagnetismMode = parser.ParseInteger() },
-
             { "CameraPitch", (parser, x) => x.CameraPitch = parser.ParseFloat() },
             { "CameraYaw", (parser, x) => x.CameraYaw = parser.ParseFloat() },
             { "CameraHeight", (parser, x) => x.CameraHeight = parser.ParseFloat() },
@@ -154,7 +149,6 @@ namespace OpenSage
             { "UseCameraInReplay", (parser, x) => x.UseCameraInReplay = parser.ParseBoolean() },
             { "CameraAdjustSpeed", (parser, x) => x.CameraAdjustSpeed = parser.ParseFloat() },
             { "ScrollAmountCutoff", (parser, x) => x.ScrollAmountCutoff = parser.ParseFloat() },
-            { "ScrollPitchMultiplier", (parser, x) => x.ScrollPitchMultiplier = parser.ParseFloat() },
             { "EnforceMaxCameraHeight", (parser, x) => x.EnforceMaxCameraHeight = parser.ParseBoolean() },
             { "TerrainHeightAtEdgeOfMap", (parser, x) => x.TerrainHeightAtEdgeOfMap = parser.ParseFloat() },
             { "UnitDamagedThreshold", (parser, x) => x.UnitDamagedThreshold = parser.ParseFloat() },
@@ -349,11 +343,7 @@ namespace OpenSage
             { "HandicapBuildSpeed100", (parser, x) => x.HandicapBuildSpeed100 = parser.ParsePercentage() },
 
             { "ValuePerSupplyBox", (parser, x) => x.ValuePerSupplyBox = parser.ParseInteger() },
-            { "SupplyBoxesPerTibCrystal", (parser, x) => x.SupplyBoxesPerTibCrystal = parser.ParseInteger() },
             { "SupplyBoxesPerTree", (parser, x) => x.SupplyBoxesPerTree = parser.ParseInteger() },
-
-            { "GameSpeedFactor", (parser, x) => x.GameSpeedFactor = parser.ParseFloat() },
-            { "MinimalGameSpeedFactor", (parser, x) => x.MinimalGameSpeedFactor = parser.ParseFloat() },
 
             { "BuildSpeed", (parser, x) => x.BuildSpeed = parser.ParseFloat() },
             { "MinDistFromEdgeOfMapForBuild", (parser, x) => x.MinDistFromEdgeOfMapForBuild = parser.ParseFloat() },
@@ -426,7 +416,7 @@ namespace OpenSage
             { "SellPercentage", (parser, x) => x.SellPercentage = parser.ParsePercentage() },
 
             { "BaseRegenHealthPercentPerSecond", (parser, x) => x.BaseRegenHealthPercentPerSecond = parser.ParsePercentage() },
-            { "BaseRegenDelay", (parser, x) => x.BaseRegenDelay = parser.ParseInteger() },
+            { "BaseRegenDelay", (parser, x) => x.BaseRegenDelay = parser.ParseTimeMillisecondsToLogicFrames() },
 
             { "SpecialPowerViewObject", (parser, x) => x.SpecialPowerViewObject = parser.ParseAssetReference() },
 
@@ -512,7 +502,6 @@ namespace OpenSage
             { "TutorialObjective", (parser, x) => x.TutorialObjective = parser.ParseLocalizedStringKey() },
 
             { "BasicTutorialMap", (parser, x) => x.BasicTutorialMap = parser.ParseFileName() },
-            { "BasicTutorialMapConsole", (parser, x) => x.BasicTutorialMapConsole = parser.ParseFileName() },
             { "BasicTutorialLoadScreenStillImage", (parser, x) => x.BasicTutorialLoadScreenStillImage = parser.ParseAssetReference() },
             { "BasicTutorialLoadScreenMusicTrack", (parser, x) => x.BasicTutorialLoadScreenMusicTrack = parser.ParseAssetReference() },
             { "BasicTutorialObjective", (parser, x) => x.BasicTutorialObjective = parser.ParseLocalizedStringKey() },
@@ -521,7 +510,6 @@ namespace OpenSage
             { "AdvancedTutorialMap", (parser, x) => x.AdvancedTutorialMap = parser.ParseFileName() },
             { "AdvancedTutorialLoadScreenStillImage", (parser, x) => x.AdvancedTutorialLoadScreenStillImage = parser.ParseAssetReference() },
             { "AdvancedTutorialLoadScreenMusicTrack", (parser, x) => x.AdvancedTutorialLoadScreenMusicTrack = parser.ParseAssetReference() },
-            { "AdvancedTutorialLoadMovie", (parser, x) => x.AdvancedTutorialLoadMovie = parser.ParseAssetReference() },
             { "AdvancedTutorialObjective", (parser, x) => x.AdvancedTutorialObjective = parser.ParseLocalizedStringKey() },
             { "AdvancedTutorialMillisecondsAfterStartToStartFadeUp", (parser, x) => x.AdvancedTutorialMillisecondsAfterStartToStartFadeUp = parser.ParseInteger() },
 
@@ -552,7 +540,6 @@ namespace OpenSage
             { "GarrisonedRangeMultiplier", (parser, x) => x.GarrisonedRangeMultiplier = parser.ParseFloat() },
 
             { "MaxPathfindCellsPerFrame", (parser, x) => x.MaxPathfindCellsPerFrame = parser.ParseInteger() },
-            { "MaxPathfindCellsPerPhase", (parser, x) => x.MaxPathfindCellsPerPhase = parser.ParseInteger() },
             { "MaxCellsFindMeleeEngagementLocation", (parser, x) => x.MaxCellsFindMeleeEngagementLocation = parser.ParseInteger() },
             { "MaxCellsAdjustDestination", (parser, x) => x.MaxCellsAdjustDestination = parser.ParseInteger() },
             { "MaxCellsAdjustHordeMeleeDestination", (parser, x) => x.MaxCellsAdjustHordeMeleeDestination = parser.ParseInteger() },
@@ -568,8 +555,6 @@ namespace OpenSage
             { "MaxCellsToExamineTowardsGoal", (parser, x) => x.MaxCellsToExamineTowardsGoal = parser.ParseInteger() },
 
             { "NumMinutesBeforePlayersCanTransferMoney", (parser, x) => x.NumMinutesBeforePlayersCanTransferMoney = parser.ParseInteger() },
-
-            { "NumFilmImages", (parser, x) => x.NumFilmImages = parser.ParseInteger() },
 
             { "StateMachineDebug", (parser, x) => x.StateMachineDebug = parser.ParseBoolean() },
             { "UseCameraConstraints", (parser, x) => x.UseCameraConstraints = parser.ParseBoolean() },
@@ -601,15 +586,16 @@ namespace OpenSage
 
             { "VTune", (parser, x) => x.VTune = parser.ParseBoolean() },
 
-            { "ShellMapOn", (parser, x) => x.ShellMapOn = parser.ParseBoolean() }
+            { "ShellMapOn", (parser, x) => x.ShellMapOn = parser.ParseBoolean() },
+
+            { "PlayIntro", (parser, x) => x.PlayIntro = parser.ParseBoolean() },
+            { "AmbientStreamsOn", (parser, x) => x.AmbientStreamsOn = parser.ParseBoolean() },
+            { "Sounds3DOn", (parser, x) => x.Sounds3DOn = parser.ParseBoolean() }
         };
 
         public string ShellMapName { get; private set; }
         public string MapName { get; private set; }
         public string MoveHintName { get; private set; }
-
-        [AddedIn(SageGame.Cnc3)]
-        public float MoveHintZBias { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
         public bool ShowProps { get; private set; }
@@ -684,6 +670,7 @@ namespace OpenSage
         public string DefaultUnitHealingBuffFxList { get; private set; }
         public string DefaultStructureRepairBuffFxList { get; private set; }
 
+        public float TimeAfterDamageUntilRepairAllowed { get; private set; }
         public float DefaultStructureRubbleHeight { get; private set; }
 
         public string VertexWaterAvailableMaps1 { get; private set; }
@@ -746,9 +733,6 @@ namespace OpenSage
         public float VertexWaterAttenuationC4 { get; private set; }
         public float VertexWaterAttenuationRange4 { get; private set; }
 
-        [AddedIn(SageGame.Cnc3)]
-        public int TimeAfterDamageUntilRepairAllowed { get; private set; }
-
         public float DownwindAngle { get; private set; }
         public bool DrawSkyBox { get; private set; }
         public float SkyBoxPositionZ { get; private set; }
@@ -775,12 +759,6 @@ namespace OpenSage
         [AddedIn(SageGame.Bfme)]
         public float CameraTerrainSampleRadiusForHeight { get; private set; }
 
-        [AddedIn(SageGame.Cnc3)]
-        public float JoypadScrollScalar { get; private set; }
-
-        [AddedIn(SageGame.Cnc3)]
-        public int CursorMagnetismMode { get; private set; }
-
         public float CameraPitch { get; private set; }
         public float CameraYaw { get; private set; }
         public float CameraHeight { get; private set; }
@@ -792,9 +770,6 @@ namespace OpenSage
 
         public float CameraAdjustSpeed { get; private set; }
         public float ScrollAmountCutoff { get; private set; }
-
-        [AddedIn(SageGame.Cnc3)]
-        public float ScrollPitchMultiplier { get; private set; }
 
         public bool EnforceMaxCameraHeight { get; private set; }
         public float TerrainHeightAtEdgeOfMap { get; private set; }
@@ -1106,17 +1081,8 @@ namespace OpenSage
 
         public int ValuePerSupplyBox { get; private set; }
 
-        [AddedIn(SageGame.Cnc3)]
-        public int SupplyBoxesPerTibCrystal { get; private set; }
-
         [AddedIn(SageGame.Bfme)]
         public int SupplyBoxesPerTree { get; private set; }
-
-        [AddedIn(SageGame.Cnc3)]
-        public float GameSpeedFactor { get; private set; }
-
-        [AddedIn(SageGame.Cnc3)]
-        public float MinimalGameSpeedFactor { get; private set; }
 
         public float BuildSpeed { get; private set; }
         public float MinDistFromEdgeOfMapForBuild { get; private set; }
@@ -1194,7 +1160,7 @@ namespace OpenSage
         public Percentage SellPercentage { get; private set; }
 
         public Percentage BaseRegenHealthPercentPerSecond { get; private set; }
-        public int BaseRegenDelay { get; private set; }
+        public LogicFrameSpan BaseRegenDelay { get; private set; }
 
         public string SpecialPowerViewObject { get; private set; }
 
@@ -1364,9 +1330,6 @@ namespace OpenSage
         [AddedIn(SageGame.Bfme2)]
         public string BasicTutorialMap { get; private set; }
 
-        [AddedIn(SageGame.Cnc3)]
-        public string BasicTutorialMapConsole { get; private set; }
-
         [AddedIn(SageGame.Bfme2)]
         public string BasicTutorialLoadScreenStillImage { get; private set; }
 
@@ -1387,9 +1350,6 @@ namespace OpenSage
 
         [AddedIn(SageGame.Bfme2)]
         public string AdvancedTutorialLoadScreenMusicTrack { get; private set; }
-
-        [AddedIn(SageGame.Cnc3)]
-        public string AdvancedTutorialLoadMovie { get; private set; }
 
         [AddedIn(SageGame.Bfme2)]
         public string AdvancedTutorialObjective { get; private set; }
@@ -1469,9 +1429,6 @@ namespace OpenSage
         [AddedIn(SageGame.Bfme2)]
         public int MaxPathfindCellsPerFrame { get; private set; }
 
-        [AddedIn(SageGame.Cnc3)]
-        public int MaxPathfindCellsPerPhase { get; private set; }
-
         [AddedIn(SageGame.Bfme2)]
         public int MaxCellsFindMeleeEngagementLocation { get; private set; }
 
@@ -1514,9 +1471,6 @@ namespace OpenSage
         [AddedIn(SageGame.Bfme2)]
         public int NumMinutesBeforePlayersCanTransferMoney { get; private set; }
 
-        [AddedIn(SageGame.Cnc3)]
-        public int NumFilmImages { get; private set; }
-
         public bool StateMachineDebug { get; private set; }
         public bool UseCameraConstraints { get; private set; }
         public bool ShroudOn { get; private set; }
@@ -1551,6 +1505,12 @@ namespace OpenSage
         public int MaxDebugCashValueMapValue { get; private set; }
 
         public bool VTune { get; private set; }
+
+        public bool PlayIntro { get; private set; }
+
+        public bool AmbientStreamsOn { get; private set; }
+
+        public bool Sounds3DOn { get; private set; }
 
         [AddedIn(SageGame.Bfme2Rotwk)]
         public bool ShellMapOn { get; private set; }
@@ -1597,7 +1557,7 @@ namespace OpenSage
 
     public sealed class WeaponBonus : Dictionary<WeaponBonusAttributeType, Percentage>
     {
-        
+
     }
 
     public enum WeaponBonusAttributeType
@@ -1634,6 +1594,8 @@ namespace OpenSage
 
         [IniEnum("DRONE_SPOTTING")]
         DroneSpotting,
+
+        __Unknown,
 
         [IniEnum("ENTHUSIASTIC")]
         Enthusiastic,
@@ -1677,11 +1639,11 @@ namespace OpenSage
         [IniEnum("SOLO_AI_HARD")]
         SoloAIHard,
 
-        [IniEnum("FANATICISM"), AddedIn(SageGame.CncGeneralsZeroHour)]
-        Fanaticism,
-
         [IniEnum("TARGET_FAERIE_FIRE"), AddedIn(SageGame.CncGeneralsZeroHour)]
         TargetFaerieFire,
+
+        [IniEnum("FANATICISM"), AddedIn(SageGame.CncGeneralsZeroHour)]
+        Fanaticism,
 
         [IniEnum("FRENZY_ONE"), AddedIn(SageGame.CncGeneralsZeroHour)]
         FrenzyOne,

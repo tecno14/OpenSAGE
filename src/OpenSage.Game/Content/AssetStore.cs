@@ -1,7 +1,6 @@
 ﻿using System.Collections.Generic;
 using OpenSage.Audio;
 using OpenSage.Content.Loaders;
-using OpenSage.Data;
 using OpenSage.Eva;
 using OpenSage.FX;
 using OpenSage.Graphics;
@@ -14,6 +13,7 @@ using OpenSage.Gui.InGame;
 using OpenSage.Gui.Wnd.Transitions;
 using OpenSage.Input;
 using OpenSage.Input.Cursors;
+using OpenSage.IO;
 using OpenSage.LivingWorld;
 using OpenSage.LivingWorld.AutoResolve;
 using OpenSage.Lod;
@@ -21,6 +21,7 @@ using OpenSage.Logic;
 using OpenSage.Logic.AI;
 using OpenSage.Logic.Object;
 using OpenSage.Logic.Pathfinding;
+using OpenSage.Rendering;
 using OpenSage.Terrain;
 using OpenSage.Terrain.Roads;
 using Veldrid;
@@ -30,10 +31,8 @@ namespace OpenSage.Content
     public sealed class AssetStore
     {
         private readonly List<IScopedSingleAssetStorage> _scopedSingleAssetStorage;
-        private readonly Dictionary<uint, IScopedSingleAssetStorage> _singleAssetStorageByTypeId;
 
         private readonly List<IScopedAssetCollection> _scopedAssetCollections;
-        private readonly Dictionary<uint, IScopedAssetCollection> _byTypeId;
 
         internal AssetLoadContext LoadContext { get; }
 
@@ -77,7 +76,7 @@ namespace OpenSage.Content
         public ScopedAssetCollection<AIBase> AIBases { get; }
         public ScopedAssetCollection<AIDozerAssignment> AIDozerAssignments { get; }
         public ScopedAssetCollection<AmbientStream> AmbientStreams { get; }
-        public ScopedAssetCollection<Animation> Animations { get; }
+        public ScopedAssetCollection<AnimationTemplate> Animations { get; }
         public ScopedAssetCollection<ArmorTemplate> ArmorTemplates { get; }
         public ScopedAssetCollection<ArmyDefinition> ArmyDefinitions { get; }
         public ScopedAssetCollection<AudioEvent> AudioEvents { get; }
@@ -149,7 +148,7 @@ namespace OpenSage.Content
         public ScopedAssetCollection<ObjectDefinition> ObjectDefinitions { get; }
         public ScopedAssetCollection<PlayerAIType> PlayerAITypes { get; }
         public ScopedAssetCollection<PlayerTemplate> PlayerTemplates { get; }
-        public ScopedAssetCollection<Rank> Ranks { get; }
+        public ScopedAssetCollection<RankTemplate> Ranks { get; }
         public ScopedAssetCollection<RegionCampaign> RegionCampaigns { get; }
         public ScopedAssetCollection<RoadTemplate> RoadTemplates { get; }
         public ScopedAssetCollection<Science> Sciences { get; }
@@ -174,11 +173,13 @@ namespace OpenSage.Content
         public ScopedAssetCollection<WindowTransition> WindowTransitions { get; }
 
         internal AssetStore(
+            SageGame sageGame,
             FileSystem fileSystem,
             string language,
             GraphicsDevice graphicsDevice,
             StandardGraphicsResources standardGraphicsResources,
             ShaderResourceManager shaderResources,
+            ShaderSetStore shaderSetStore,
             OnDemandAssetLoadStrategy loadStrategy)
         {
             LoadContext = new AssetLoadContext(
@@ -187,18 +188,15 @@ namespace OpenSage.Content
                 graphicsDevice,
                 standardGraphicsResources,
                 shaderResources,
+                shaderSetStore,
                 this);
 
             _scopedSingleAssetStorage = new List<IScopedSingleAssetStorage>();
-            _singleAssetStorageByTypeId = new Dictionary<uint, IScopedSingleAssetStorage>();
 
             void AddSingleAssetStorage<TAsset>(ScopedSingleAsset<TAsset> assetStorage)
                 where TAsset : BaseSingletonAsset, new()
             {
                 _scopedSingleAssetStorage.Add(assetStorage);
-
-                var typeId = AssetHash.GetHash(typeof(TAsset).Name);
-                _singleAssetStorageByTypeId.Add(typeId, assetStorage);
             }
 
             AddSingleAssetStorage(AIData = new ScopedSingleAsset<AIData>());
@@ -237,21 +235,17 @@ namespace OpenSage.Content
             AddSingleAssetStorage(Weather = new ScopedSingleAsset<Weather>());
 
             _scopedAssetCollections = new List<IScopedAssetCollection>();
-            _byTypeId = new Dictionary<uint, IScopedAssetCollection>();
 
             void AddAssetCollection<TAsset>(ScopedAssetCollection<TAsset> assetCollection)
                 where TAsset : BaseAsset
             {
                 _scopedAssetCollections.Add(assetCollection);
-
-                var typeId = AssetHash.GetHash(typeof(TAsset).Name);
-                _byTypeId.Add(typeId, assetCollection);
             }
 
             AddAssetCollection(AIBases = new ScopedAssetCollection<AIBase>(this));
             AddAssetCollection(AIDozerAssignments = new ScopedAssetCollection<AIDozerAssignment>(this));
             AddAssetCollection(AmbientStreams = new ScopedAssetCollection<AmbientStream>(this));
-            AddAssetCollection(Animations = new ScopedAssetCollection<Animation>(this));
+            AddAssetCollection(Animations = new ScopedAssetCollection<AnimationTemplate>(this));
             AddAssetCollection(ArmorTemplates = new ScopedAssetCollection<ArmorTemplate>(this));
             AddAssetCollection(ArmyDefinitions = new ScopedAssetCollection<ArmyDefinition>(this));
             AddAssetCollection(AudioEvents = new ScopedAssetCollection<AudioEvent>(this));
@@ -323,7 +317,7 @@ namespace OpenSage.Content
             AddAssetCollection(ObjectDefinitions = new ScopedAssetCollection<ObjectDefinition>(this));
             AddAssetCollection(PlayerAITypes = new ScopedAssetCollection<PlayerAIType>(this));
             AddAssetCollection(PlayerTemplates = new ScopedAssetCollection<PlayerTemplate>(this));
-            AddAssetCollection(Ranks = new ScopedAssetCollection<Rank>(this));
+            AddAssetCollection(Ranks = new ScopedAssetCollection<RankTemplate>(this));
             AddAssetCollection(RegionCampaigns = new ScopedAssetCollection<RegionCampaign>(this));
             AddAssetCollection(RoadTemplates = new ScopedAssetCollection<RoadTemplate>(this));
             AddAssetCollection(Sciences = new ScopedAssetCollection<Science>(this));
@@ -346,18 +340,6 @@ namespace OpenSage.Content
             AddAssetCollection(WeaponTemplates = new ScopedAssetCollection<WeaponTemplate>(this));
             AddAssetCollection(WeatherDatas = new ScopedAssetCollection<WeatherData>(this));
             AddAssetCollection(WindowTransitions = new ScopedAssetCollection<WindowTransition>(this));
-        }
-
-        internal IScopedAssetCollection GetAssetCollection(uint typeId)
-        {
-            _byTypeId.TryGetValue(typeId, out var result);
-            return result;
-        }
-
-        internal IScopedSingleAssetStorage GetSingleAsset(uint typeId)
-        {
-            _singleAssetStorageByTypeId.TryGetValue(typeId, out var result);
-            return result;
         }
 
         internal void PushScope()

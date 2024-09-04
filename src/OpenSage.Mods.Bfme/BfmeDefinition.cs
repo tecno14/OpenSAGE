@@ -4,8 +4,9 @@ using OpenSage.Data;
 using OpenSage.Gui;
 using OpenSage.Gui.Apt;
 using OpenSage.Gui.ControlBar;
-using OpenSage.Gui.UnitOverlay;
+using OpenSage.Gui.CommandListOverlay;
 using OpenSage.Mods.Bfme.Gui;
+using System.IO;
 
 namespace OpenSage.Mods.Bfme
 {
@@ -31,15 +32,19 @@ namespace OpenSage.Mods.Bfme
         public string Identifier { get; } = "bfme";
 
         public IMainMenuSource MainMenu { get; } = new AptMainMenuSource("MainMenu.apt");
-        public IControlBarSource ControlBar { get; }
-        public IUnitOverlaySource UnitOverlay { get; } = new RadialUnitOverlaySource();
+        public IControlBarSource ControlBar { get; } = new AptControlBarSource();
+        public ICommandListOverlaySource CommandListOverlay { get; } = new RadialUnitOverlaySource();
 
         public uint ScriptingTicksPerSecond => 5;
+
+        public string GetLocalizedStringsPath(string language) => Path.Combine("lang", language, "lotr");
 
         public OnDemandAssetLoadStrategy CreateAssetLoadStrategy()
         {
             return new OnDemandAssetLoadStrategy(PathResolvers.W3d, PathResolvers.BfmeTexture);
         }
+
+        public Scene25D CreateScene25D(Scene3D scene3D, AssetStore assetStore) => new(scene3D, assetStore);
 
         public static BfmeDefinition Instance { get; } = new BfmeDefinition();
 

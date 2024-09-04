@@ -1,7 +1,7 @@
 ﻿using System;
-using OpenSage.Data;
 using OpenSage.FileFormats.W3d;
 using OpenSage.Graphics.Animation;
+using OpenSage.IO;
 
 namespace OpenSage.Content.Loaders
 {
@@ -48,6 +48,12 @@ namespace OpenSage.Content.Loaders
                 w3dFile = W3dFile.FromStream(entryStream, entry.FilePath);
             }
             var animation = W3DAnimation.FromW3dFile(w3dFile);
+
+            if (animation == null)
+            {
+                logger.Warn("Failed to load animation (was null): " + key);
+                return null;
+            }
 
             if (!string.Equals(animation.Name, key, StringComparison.OrdinalIgnoreCase))
             {

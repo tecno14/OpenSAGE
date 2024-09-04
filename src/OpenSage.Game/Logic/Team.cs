@@ -1,143 +1,78 @@
 ﻿using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using OpenSage.FileFormats;
 
 namespace OpenSage.Logic
 {
-    public sealed class Team
+    public sealed class Team : IPersistableObject
     {
-        public string Name { get; }
-        public Player Owner { get; }
-        public bool IsSingleton { get; }
+        private bool _enteredOrExitedPolygonTrigger;
+        private bool _isAlive;
+        private uint _numDestroyedSomething;
+        private uint _unknown1;
+        private uint _waypointId;
+        private readonly bool[] _unknownBools = new bool[16];
 
-        public Team(string name, Player owner, bool isSingleton)
+        public readonly TeamTemplate Template;
+        public readonly uint Id;
+        // TODO: Store actual objects here, not just IDs.
+        public readonly List<uint> ObjectIds = new List<uint>();
+        public uint TargetObjectID;
+
+        public readonly PlayerRelationships TeamToTeamRelationships = new PlayerRelationships();
+        public readonly PlayerRelationships TeamToPlayerRelationships = new PlayerRelationships();
+
+        internal Team(TeamTemplate template, uint id)
         {
-            Name = name;
-            Owner = owner;
-            IsSingleton = isSingleton;
+            Template = template;
+            Id = id;
         }
 
-        internal Team() { }
-
-        public static Team FromMapData(Data.Map.Team mapTeam, IList<Player> players)
+        public void Persist(StatePersister reader)
         {
-            var name = mapTeam.Properties["teamName"].Value as string;
+            reader.PersistVersion(1);
 
-            var ownerName = mapTeam.Properties["teamOwner"].Value as string;
-            var owner = players.FirstOrDefault(player => player.Name == ownerName);
-
-            var isSingleton = (bool) mapTeam.Properties["teamIsSingleton"].Value;
-
-            return new Team(name, owner, isSingleton);
-        }
-
-        internal void Load(BinaryReader reader)
-        {
-            var id = reader.ReadUInt32();
-
-            var unknown1 = reader.ReadByte();
-            if (unknown1 != 2)
+            var id = Id;
+            reader.PersistUInt32(ref id);
+            if (id != Id)
             {
-                throw new InvalidDataException();
+                throw new InvalidStateException();
             }
 
-            var unknown1_2 = reader.ReadUInt32();
+            reader.PersistList(
+                ObjectIds,
+                static (StatePersister persister, ref uint item) =>
+                {
+                    persister.PersistObjectIDValue(ref item);
+                });
 
-            var attackPriority = reader.ReadBytePrefixedAsciiString();
+            reader.SkipUnknownBytes(1);
 
-            var unknown2 = reader.ReadBooleanChecked();
+            reader.PersistBoolean(ref _enteredOrExitedPolygonTrigger);
+            reader.PersistBoolean(ref _isAlive);
 
-            var unknown2_1 = reader.ReadByte();
-            if (unknown2_1 != 1)
+            reader.SkipUnknownBytes(5);
+
+            reader.PersistUInt32(ref _numDestroyedSomething);
+
+            reader.PersistUInt32(ref _unknown1);
+            if (_unknown1 != 0 && _unknown1 != ObjectIds.Count)
             {
-                throw new InvalidDataException();
+                throw new InvalidStateException();
             }
 
-            var unknown3 = reader.ReadUInt32();
+            reader.PersistUInt32(ref _waypointId);
 
-            var unknown5 = reader.ReadUInt16();
-            if (unknown5 != 0)
-            {
-                if (unknown5 != 1)
+            reader.PersistArrayWithUInt16Length(
+                _unknownBools,
+                static (StatePersister persister, ref bool item) =>
                 {
-                    throw new InvalidDataException();
-                }
+                    persister.PersistBooleanValue(ref item);
+                });
 
-                var unknown5_1 = reader.ReadUInt32();
+            reader.SkipUnknownBytes(2);
 
-                var unknown6 = reader.ReadByte();
-
-                var unknown6_1 = reader.ReadUInt32();
-
-                var numObjects = reader.ReadUInt16();
-                for (var i = 0; i < numObjects; i++)
-                {
-                    var objectId = reader.ReadUInt32();
-                }
-
-                var unknown7 = reader.ReadUInt16();
-
-                var unknown8 = reader.ReadUInt32();
-                if (unknown8 != 0 && unknown8 != 1)
-                {
-                    throw new InvalidDataException();
-                }
-
-                var unknown9 = reader.ReadUInt32();
-                if (unknown9 != 0)
-                {
-                    throw new InvalidDataException();
-                }
-
-                var unknown10 = reader.ReadUInt32();
-                if (unknown10 != 0)
-                {
-                    throw new InvalidDataException();
-                }
-
-                var unknown11 = reader.ReadUInt32();
-                if (unknown11 != 0)
-                {
-                    throw new InvalidDataException();
-                }
-
-                var unknown12 = reader.ReadUInt16();
-                if (unknown12 != 0)
-                {
-                    throw new InvalidDataException();
-                }
-
-                var unknown13 = reader.ReadUInt32();
-                if (unknown13 != 16)
-                {
-                    throw new InvalidDataException();
-                }
-
-                for (var i = 0; i < 5; i++)
-                {
-                    var unknown14 = reader.ReadUInt32();
-                    if (unknown14 != 0)
-                    {
-                        throw new InvalidDataException();
-                    }
-                }
-
-                for (var i = 0; i < 2; i++)
-                {
-                    var unknown15 = reader.ReadUInt16();
-                    if (unknown15 != 1)
-                    {
-                        throw new InvalidDataException();
-                    }
-
-                    var unknown16 = reader.ReadByte();
-                    if (unknown16 != 0)
-                    {
-                        throw new InvalidDataException();
-                    }
-                }
-            }
+            reader.PersistObjectID(ref TargetObjectID);
+            reader.PersistObject(TeamToTeamRelationships);
+            reader.PersistObject(TeamToPlayerRelationships);
         }
     }
 }

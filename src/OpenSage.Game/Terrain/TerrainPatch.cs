@@ -1,25 +1,26 @@
-﻿using System;
-using System.Numerics;
-using OpenSage.Graphics.Rendering;
+﻿using System.Numerics;
 using OpenSage.Graphics.Shaders;
 using OpenSage.Mathematics;
+using OpenSage.Rendering;
 using OpenSage.Utilities.Extensions;
 using Veldrid;
 using Rectangle = OpenSage.Mathematics.Rectangle;
 
 namespace OpenSage.Terrain
 {
-    public sealed class TerrainPatch : DisposableBase
+    public sealed class TerrainPatch : RenderObject
     {
         private readonly DeviceBuffer _vertexBuffer;
         private readonly DeviceBuffer _indexBuffer;
         private readonly uint _numIndices;
 
-        private readonly BeforeRenderDelegate _beforeRender;
-
         public Rectangle Bounds { get; }
 
-        public BoundingBox BoundingBox { get; }
+        public override MaterialPass MaterialPass { get; }
+
+        public override string DebugName { get; }
+
+        public override AxisAlignedBoundingBox BoundingBox { get; }
 
         public Triangle[] Triangles { get; }
 
@@ -28,9 +29,10 @@ namespace OpenSage.Terrain
             Rectangle patchBounds,
             GraphicsDevice graphicsDevice,
             TerrainPatchIndexBufferCache indexBufferCache,
-            ResourceSet materialResourceSet,
-            ResourceSet radiusCursorDecalsResourceSet)
+            Material material)
         {
+            DebugName = $"Terrain_{Bounds}";
+
             Bounds = patchBounds;
 
             _indexBuffer = indexBufferCache.GetIndexBuffer(
@@ -51,12 +53,7 @@ namespace OpenSage.Terrain
             BoundingBox = boundingBox;
             Triangles = triangles;
 
-            _beforeRender = (cl, context) =>
-            {
-                cl.SetGraphicsResourceSet(4, materialResourceSet);
-                cl.SetGraphicsResourceSet(5, radiusCursorDecalsResourceSet);
-                cl.SetVertexBuffer(0, _vertexBuffer);
-            };
+            MaterialPass = new MaterialPass(material, null);
         }
 
         private static DeviceBuffer CreateVertexBuffer(
@@ -64,7 +61,7 @@ namespace OpenSage.Terrain
            HeightMap heightMap,
            Rectangle patchBounds,
            ushort[] indices,
-           out BoundingBox boundingBox,
+           out AxisAlignedBoundingBox boundingBox,
            out Triangle[] triangles)
         {
             var numVertices = patchBounds.Width * patchBounds.Height;
@@ -88,7 +85,7 @@ namespace OpenSage.Terrain
                 }
             }
 
-            boundingBox = BoundingBox.CreateFromPoints(points);
+            boundingBox = AxisAlignedBoundingBox.CreateFromPoints(points);
 
             triangles = new Triangle[(patchBounds.Width - 1) * (patchBounds.Height) * 2];
 
@@ -143,21 +140,13 @@ namespace OpenSage.Terrain
             }
         }
 
-        internal void BuildRenderList(
-            RenderList renderList,
-            ShaderSet shaderSet,
-            Pipeline pipeline)
+        public override void Render(CommandList commandList)
         {
-            renderList.Terrain.RenderItems.Add(new RenderItem(
-                $"Terrain-{Bounds}",
-                shaderSet,
-                pipeline,
-                BoundingBox,
-                Matrix4x4.Identity,
-                0,
-                _numIndices,
-                _indexBuffer,
-                _beforeRender));
+            commandList.SetVertexBuffer(0, _vertexBuffer);
+
+            commandList.SetIndexBuffer(_indexBuffer, IndexFormat.UInt16);
+
+            commandList.DrawIndexed(_numIndices, 1, 0, 0, 0);
         }
     }
 }

@@ -54,7 +54,7 @@ namespace OpenSage.Graphics.Rendering.Water
             GraphicsDevice graphicsDevice,
             GlobalShaderResources globalShaderResources)
         {
-            _waterShaderResources = new WaterShaderResources(graphicsDevice, globalShaderResources);
+            _waterShaderResources = graphicsLoadContext.ShaderResources.Water;
 
             var _waterSets = assetStore.WaterSets;
             _waterTextureSet = new Dictionary<TimeOfDay, Texture>();
@@ -133,7 +133,7 @@ namespace OpenSage.Graphics.Rendering.Water
             Scene3D scene,
             GraphicsDevice graphicsDevice,
             CommandList commandList,
-            Action<Framebuffer?, Framebuffer?> drawSceneCallback)
+            Action<Framebuffer, Framebuffer> drawSceneCallback)
         {
             // TODO: Get bump texture from water area somehow
             //_bumpTexture = assetStore.Textures.GetByName(bumpTexName);

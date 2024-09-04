@@ -7,13 +7,17 @@ using OpenSage.Logic.Object.Production;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class ParkingPlaceBehaviour : BehaviorModule, IProductionExit
+    public sealed class ParkingPlaceBehaviour : UpdateModule, IHasRallyPoint, IProductionExit
     {
+        public RallyPointManager RallyPointManager { get; } = new();
+
         private readonly ParkingPlaceBehaviorModuleData _moduleData;
         private readonly GameObject _gameObject;
         private readonly GameContext _gameContext;
         private readonly GameObject[] _parkingSlots;
         private readonly Dictionary<string, bool> _blockedBones;
+        private readonly List<HealingData> _healingData;
+        private LogicFrame _nextHealFrame = new LogicFrame(0x3FFFFFFFu);
 
         internal ParkingPlaceBehaviour(ParkingPlaceBehaviorModuleData moduleData, GameObject gameObject, GameContext context)
         {
@@ -22,6 +26,7 @@ namespace OpenSage.Logic.Object
             _gameContext = context;
             _parkingSlots = new GameObject[_moduleData.NumRows * _moduleData.NumCols];
             _blockedBones = new Dictionary<string, bool>();
+            _healingData = new List<HealingData>();
         }
 
         public bool CanProduceObject(ObjectDefinition definition, IReadOnlyList<ProductionJob> productionQueue)
@@ -32,7 +37,7 @@ namespace OpenSage.Logic.Object
             }
 
             // e.g. a enqueued upgrade (mig armor) has no AIUpdate
-            var numInQueue = productionQueue.Count(job => ((JetAIUpdateModuleData)job.ObjectDefinition?.AIUpdate)?.NeedsRunway ?? false);
+            var numInQueue = productionQueue.Count(job => ((JetAIUpdateModuleData)job.ObjectDefinition?.Behaviors.Values.Where(x => x.Data is AIUpdateModuleData).Select(x => x.Data).FirstOrDefault())?.NeedsRunway ?? false);
             var slotsAvailable = _parkingSlots.Count(_ => _ == null);
             return slotsAvailable > numInQueue;
         }
@@ -210,7 +215,7 @@ namespace OpenSage.Logic.Object
 
         public Transform GetBoneTransform(string name)
         {
-            var (_, bone) = _gameObject.FindBone(name);
+            var (_, bone) = _gameObject.Drawable.FindBone(name);
             if (bone == null)
             {
                 throw new InvalidOperationException("Could not find runway start point bone");
@@ -222,11 +227,61 @@ namespace OpenSage.Logic.Object
 
         private int SlotToHangar(int slot) => slot / 2 + 1;
         private int SlotToRunway(int slot) => slot % 2 + 1;
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(3);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            var unknown1 = 4u;
+            reader.PersistUInt32(ref unknown1);
+            if (unknown1 != 4)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.SkipUnknownBytes(17);
+
+            var unknown2 = 2u;
+            reader.PersistUInt32(ref unknown2);
+            if (unknown2 != 2)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.SkipUnknownBytes(15);
+
+            reader.PersistListWithByteCount(_healingData, (StatePersister persister, ref HealingData item) =>
+            {
+                persister.PersistObjectValue(ref item);
+            });
+
+            reader.PersistObject(RallyPointManager);
+
+            // This is the default 0x3FFFFFFFu, unless we are healing something,
+            // in which case it's CurrentFrame + a small number of frames.
+            reader.PersistLogicFrame(ref _nextHealFrame);
+        }
+
+        private struct HealingData : IPersistableObject
+        {
+            public uint ObjectID;
+            public LogicFrame FrameSomething;
+
+            public void Persist(StatePersister persister)
+            {
+                persister.PersistObjectID(ref ObjectID);
+                persister.PersistLogicFrame(ref FrameSomething);
+            }
+        }
     }
 
     /// <summary>
-    /// Used by FS_AIRFIELD KindOfs. If <see cref="HasRunways"/> is set then the model requires 
-    /// RunwayStartN, RunwayEndN, RunwayNPrepN, RunwayNParkingN and RunwayNParkNHan bones where N 
+    /// Used by FS_AIRFIELD KindOfs. If <see cref="HasRunways"/> is set then the model requires
+    /// RunwayStartN, RunwayEndN, RunwayNPrepN, RunwayNParkingN and RunwayNParkNHan bones where N
     /// corresponds to rows and columns. Module will only use the HeliPark01 bone for helicopters.
     /// </summary>
     public sealed class ParkingPlaceBehaviorModuleData : BehaviorModuleData

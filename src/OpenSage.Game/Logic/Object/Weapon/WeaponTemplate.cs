@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
@@ -88,8 +88,8 @@ namespace OpenSage.Logic.Object
             { "MinimumAttackRange", (parser, x) => x.MinimumAttackRange = parser.ParseFloat() },
             { "MinTargetPitch", (parser, x) => x.MinTargetPitch = parser.ParseInteger() },
             { "MaxTargetPitch", (parser, x) => x.MaxTargetPitch = parser.ParseInteger() },
-            { "WeaponSpeed", (parser, x) => x.WeaponSpeed = parser.ParseFloat() },
-            { "MinWeaponSpeed", (parser, x) => x.MinWeaponSpeed = parser.ParseFloat() },
+            { "WeaponSpeed", (parser, x) => x.WeaponSpeed = parser.ParseVelocityToLogicFrames() },
+            { "MinWeaponSpeed", (parser, x) => x.MinWeaponSpeed = parser.ParseVelocityToLogicFrames() },
             { "MaxWeaponSpeed", (parser, x) => x.MaxWeaponSpeed = parser.ParseInteger() },
             { "ScaleWeaponSpeed", (parser, x) => x.ScaleWeaponSpeed = parser.ParseBoolean() },
             { "WeaponRecoil", (parser, x) => x.WeaponRecoil = parser.ParseInteger() },
@@ -115,12 +115,12 @@ namespace OpenSage.Logic.Object
             { "ShotsPerBarrel", (parser, x) => x.ShotsPerBarrel = parser.ParseInteger() },
             { "ClipSize", (parser, x) => x.ClipSize = parser.ParseInteger() },
             { "ClipReloadTime", (parser, x) => x.ClipReloadTime = RangeDuration.Parse(parser) },
-            { "AutoReloadWhenIdle", (parser, x) => x.AutoReloadWhenIdle = new RangeDuration(parser.ParseTimeMilliseconds()) },
+            { "AutoReloadWhenIdle", (parser, x) => x.AutoReloadWhenIdle = new RangeDuration(parser.ParseTimeMillisecondsToLogicFrames()) },
             { "AutoReloadsClip", (parser, x) => x.AutoReloadsClip = parser.ParseEnum<WeaponReloadType>() },
             { "ContinuousFireOne", (parser, x) => x.ContinuousFireOne = parser.ParseInteger() },
             { "ContinuousFireTwo", (parser, x) => x.ContinuousFireTwo = parser.ParseInteger() },
             { "ContinuousFireCoast", (parser, x) => x.ContinuousFireCoast = parser.ParseInteger() },
-            { "PreAttackDelay", (parser, x) => x.PreAttackDelay = new RangeDuration(parser.ParseTimeMilliseconds()) },
+            { "PreAttackDelay", (parser, x) => x.PreAttackDelay = new RangeDuration(parser.ParseTimeMillisecondsToLogicFrames()) },
             { "PreAttackType", (parser, x) => x.PreAttackType = parser.ParseEnum<WeaponPrefireType>() },
             { "ContinueAttackRange", (parser, x) => x.ContinueAttackRange = parser.ParseInteger() },
             { "AcceptableAimDelta", (parser, x) => x.AcceptableAimDelta = parser.ParseFloat() },
@@ -131,7 +131,7 @@ namespace OpenSage.Logic.Object
             { "HitStoredTarget", (parser, x) => x.HitStoredTarget = parser.ParseBoolean() },
             { "PreferredTargetBone", (parser, x) => x.PreferredTargetBone = parser.ParseAssetReference() },
             { "MeleeWeapon", (parser, x) => x.MeleeWeapon = parser.ParseBoolean() },
-            { "IdleAfterFiringDelay", (parser, x) => x.IdleAfterFiringDelay = new RangeDuration(parser.ParseTimeMilliseconds()) },
+            { "IdleAfterFiringDelay", (parser, x) => x.IdleAfterFiringDelay = new RangeDuration(parser.ParseTimeMillisecondsToLogicFrames()) },
             { "HitPassengerPercentage", (parser, x) => x.HitPassengerPercentage = parser.ParsePercentage() },
             { "CanBeDodged", (parser, x) => x.CanBeDodged = parser.ParseBoolean() },
             { "OverrideVoiceAttackSound", (parser, x) => x.OverrideVoiceAttackSound = parser.ParseAssetReference() },
@@ -179,7 +179,7 @@ namespace OpenSage.Logic.Object
             { "HistoricBonusRadius", (parser, x) => x.HistoricBonusRadius = parser.ParseInteger() },
             { "HistoricBonusWeapon", (parser, x) => x.HistoricBonusWeapon = parser.ParseAssetReference() },
             { "MissileCallsOnDie", (parser, x) => x.MissileCallsOnDie = parser.ParseBoolean() },
-            { "FiringDuration", (parser, x) => x.FiringDuration = new RangeDuration(parser.ParseTimeMilliseconds()) },
+            { "FiringDuration", (parser, x) => x.FiringDuration = new RangeDuration(parser.ParseTimeMillisecondsToLogicFrames()) },
 
             // Anti flags
             { "AntiSmallMissile", (parser, x) => x.SetAntiMaskFlag(WeaponAntiFlags.AntiSmallMissile, parser.ParseBoolean()) },
@@ -485,7 +485,7 @@ namespace OpenSage.Logic.Object
             var token = parser.GetNextToken(IniParser.SeparatorsColon);
             if (parser.IsFloat(token))
             {
-                var value = TimeSpan.FromMilliseconds(parser.ScanFloat(token));
+                var value = parser.ScanTimeMillisecondsToLogicFrames(token);
                 return new RangeDuration(value);
             }
 
@@ -494,22 +494,22 @@ namespace OpenSage.Logic.Object
                 throw new IniParseException($"Unexpected range duration: {token.Text}", token.Position);
             }
 
-            var minValue = TimeSpan.FromMilliseconds(parser.ScanInteger(parser.GetNextToken()));
+            var minValue = parser.ParseTimeMillisecondsToLogicFrames();
 
             return new RangeDuration(
                 minValue,
-                TimeSpan.FromMilliseconds(parser.ParseAttributeInteger("Max")));
+                parser.ParseAttributeTimeMillisecondsToLogicFrames("Max"));
         }
 
-        public readonly TimeSpan Min;
-        public readonly TimeSpan Max;
+        public readonly LogicFrameSpan Min;
+        public readonly LogicFrameSpan Max;
 
-        public RangeDuration(TimeSpan value)
+        public RangeDuration(LogicFrameSpan value)
         {
             Min = Max = value;
         }
 
-        public RangeDuration(TimeSpan min, TimeSpan max)
+        public RangeDuration(LogicFrameSpan min, LogicFrameSpan max)
         {
             Min = min;
             Max = max;
@@ -585,52 +585,57 @@ namespace OpenSage.Logic.Object
         PerShot,
 
         /// <summary>
-        /// 
+        ///
         /// </summary>
         [IniEnum("PER_POSITION"), AddedIn(SageGame.Bfme)]
         PerPosition
     }
 
+    // items with explicit indexes have been verified against saves generated by Generals
     public enum DeathType
     {
         [IniEnum("NORMAL")]
-        Normal,
+        Normal = 0,
+
+        // this seems to pair with the Healing damage type
+        [IniEnum("NONE")]
+        None = 1,
+
+        [IniEnum("CRUSHED")]
+        Crushed,
+
+        [IniEnum("BURNED")]
+        Burned = 3,
 
         [IniEnum("EXPLODED")]
-        Exploded,
+        Exploded = 4,
+
+        [IniEnum("POISONED")]
+        Poisoned = 5,
+
+        [IniEnum("TOPPLED")]
+        Toppled,
+
+        [IniEnum("FLOODED")]
+        Flooded,
+
+        [IniEnum("SUICIDED")]
+        Suicided = 8,
 
         [IniEnum("LASERED")]
         Lasered,
 
-        [IniEnum("BURNED")]
-        Burned,
+        [IniEnum("DETONATED")]
+        Detonated,
 
-        [IniEnum("SUICIDED")]
-        Suicided,
-
-        [IniEnum("POISONED")]
-        Poisoned,
+        [IniEnum("SPLATTED")]
+        Splatted,
 
         [IniEnum("POISONED_BETA")]
         PoisonedBeta,
 
         [IniEnum("POISONED_GAMMA"), AddedIn(SageGame.CncGeneralsZeroHour)]
         PoisonedGamma,
-
-        [IniEnum("CRUSHED")]
-        Crushed,
-
-        [IniEnum("TOPPLED")]
-        Toppled,
-
-        [IniEnum("SPLATTED")]
-        Splatted,
-
-        [IniEnum("FLOODED")]
-        Flooded,
-
-        [IniEnum("DETONATED")]
-        Detonated,
 
         [IniEnum("EXTRA_4"), AddedIn(SageGame.CncGeneralsZeroHour)]
         Extra4,
@@ -676,7 +681,7 @@ namespace OpenSage.Logic.Object
 
         [IniEnum("STRUCTURES")]
         Structures = 1 << 0,
-        
+
         [IniEnum("WALLS")]
         Walls = 1 << 1,
 
@@ -735,5 +740,32 @@ namespace OpenSage.Logic.Object
         AntiParachute        = 1 << 7,
         AntiStructure        = 1 << 8,
         AntiAirborneMonster  = 1 << 9,
+    }
+
+    public static class WeaponAntiFlagsExtensions
+    {
+        public static bool CanAttackObject(this WeaponAntiFlags weapon, GameObject obj)
+        {
+            var kinds = obj.Definition.KindOf;
+
+            if ((weapon.HasFlag(WeaponAntiFlags.AntiProjectile) && obj.IsKindOf(ObjectKinds.Projectile)) ||
+                (weapon.HasFlag(WeaponAntiFlags.AntiSmallMissile) && obj.IsKindOf(ObjectKinds.SmallMissile)) ||
+                (weapon.HasFlag(WeaponAntiFlags.AntiBallisticMissile) && obj.IsKindOf(ObjectKinds.BallisticMissile)))
+            {
+                return true;
+            }
+
+            if (obj.IsAirborne())
+            {
+                return (weapon.HasFlag(WeaponAntiFlags.AntiAirborneVehicle) && obj.IsKindOf(ObjectKinds.Vehicle)) ||
+                       // unclear if this is correct
+                       (weapon.HasFlag(WeaponAntiFlags.AntiAirborneInfantry) && obj.IsKindOf(ObjectKinds.Infantry));
+            }
+
+            // this should handle when an aircraft is on the ground, since we previously checked if it was airborne
+            return (weapon.HasFlag(WeaponAntiFlags.AntiGround)) ||
+                   (weapon.HasFlag(WeaponAntiFlags.AntiMine) && obj.IsKindOf(ObjectKinds.Mine)) ||
+                   (weapon.HasFlag(WeaponAntiFlags.AntiStructure) && obj.IsKindOf(ObjectKinds.Structure));
+        }
     }
 }

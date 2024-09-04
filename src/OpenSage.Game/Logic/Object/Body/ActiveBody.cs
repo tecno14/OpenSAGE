@@ -1,24 +1,38 @@
 ﻿using System.Collections.Generic;
-using System.IO;
+using FixedMath.NET;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 using OpenSage.FX;
+using OpenSage.Logic.Object.Damage;
 using OpenSage.Mathematics;
-using OpenSage.Mathematics.FixedMath;
 
 namespace OpenSage.Logic.Object
 {
     public class ActiveBody : BodyModule
     {
+        private readonly GameContext _context;
         private readonly ActiveBodyModuleData _moduleData;
+        private readonly List<uint> _particleSystemIds = new();
 
-        protected readonly GameObject GameObject;
+        private float _currentHealth;
+        private float _lastHealthBeforeDamage;
+        private float _maxHealth;
+        private BodyDamageType _damageType;
+        private uint _unknownFrame1;
+        private DamageType _lastDamageType;
+        private DamageData _lastDamage;
+        private LogicFrame _lastDamagedAt;
+        private uint _unknownFrame3;
+        private bool _unknownBool;
+        private bool _indestructible;
+        private BitArray<ArmorSetCondition> _armorSetConditions = new();
 
         public override Fix64 MaxHealth { get; internal set; }
 
-        internal ActiveBody(GameObject gameObject, ActiveBodyModuleData moduleData)
+        public DamageData LastDamage => _lastDamage;
+
+        internal ActiveBody(GameObject gameObject, GameContext context, ActiveBodyModuleData moduleData) : base(gameObject)
         {
-            GameObject = gameObject;
+            _context = context;
             _moduleData = moduleData;
 
             MaxHealth = (Fix64) moduleData.MaxHealth;
@@ -28,16 +42,31 @@ namespace OpenSage.Logic.Object
 
         private void SetHealth(Fix64 value)
         {
+            var takingDamage = value < Health;
+
             Health = value;
-            GameObject.UpdateDamageFlags(HealthPercentage);
+            if (Health < Fix64.Zero)
+            {
+                Health = Fix64.Zero;
+            }
+
+            if (Health > MaxHealth)
+            {
+                Health = MaxHealth;
+            }
+
+            GameObject.UpdateDamageFlags(HealthPercentage, takingDamage);
+            _lastHealthBeforeDamage = _currentHealth;
+            _currentHealth = (float)Health;
         }
 
         public override void SetInitialHealth(float multiplier)
         {
             SetHealth((Fix64) ((_moduleData.InitialHealth ?? _moduleData.MaxHealth) * multiplier));
+            _lastHealthBeforeDamage = _currentHealth;
         }
 
-        public override void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, TimeInterval time)
+        public override void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, GameObject damageDealer)
         {
             if (Health <= Fix64.Zero)
             {
@@ -49,11 +78,22 @@ namespace OpenSage.Logic.Object
             // Actual amount of damage depends on armor.
             var armor = armorSet.Armor.Value;
             var damagePercent = armor?.GetDamagePercent(damageType) ?? new Percentage(1.0f);
-            var actualDamage = amount * (Fix64) ((float) damagePercent);
-            SetHealth(Health - actualDamage);
+            var actualDamage = amount * (Fix64) (float) damagePercent;
+
+            var takingDamage = damageType is not DamageType.Healing;
+
+            var newHealth = takingDamage ? Health - actualDamage: Health + actualDamage;
+
+            SetHealth(newHealth);
+
+            var damageRequest = new DamageDataRequest(damageDealer?.ID ?? 0, damageType, deathType, (float)amount, damageDealer?.Definition.Name ?? string.Empty);
+            var damageResult = new DamageDataResult((float)actualDamage, _lastHealthBeforeDamage - _currentHealth);
+
+            _lastDamage = new DamageData(damageRequest, damageResult);
+            _lastDamagedAt = _context.GameLogic.CurrentFrame;
 
             // TODO: DamageFX
-            if (armorSet.DamageFX.Value != null) //e.g. AmericaJetRaptor's ArmorSet has no DamageFX (None)
+            if (armorSet.DamageFX?.Value != null) //e.g. AmericaJetRaptor's ArmorSet has no DamageFX (None)
             {
                 var damageFXGroup = armorSet.DamageFX.Value.GetGroup(damageType);
 
@@ -68,37 +108,70 @@ namespace OpenSage.Logic.Object
 
             if (Health <= Fix64.Zero)
             {
-                GameObject.Die(deathType, time);
+                GameObject.Die(deathType);
             }
         }
 
-        internal override void Load(BinaryReader reader)
+        public override void Heal(Fix64 amount, GameObject healer)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            DoDamage(DamageType.Healing, amount, DeathType.None, healer);
+        }
 
+        public override void Heal(Fix64 amount)
+        {
+            var newHealth = Health + amount;
+            SetHealth(newHealth);
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
 
-            var unknownFloat = reader.ReadSingle();
-            if (unknownFloat != 1.0f)
+            reader.PersistSingle(ref _currentHealth);
+            reader.PersistSingle(ref _lastHealthBeforeDamage);
+            reader.PersistSingle(ref _maxHealth);
+
+            var maxHealth2 = _maxHealth;
+            reader.PersistSingle(ref maxHealth2);
+
+            if (reader.SageGame >= SageGame.CncGeneralsZeroHour)
             {
-                throw new InvalidDataException();
+                var maxHealth3 = _maxHealth;
+                reader.PersistSingle(ref maxHealth3);
+                if (maxHealth3 != maxHealth2)
+                {
+                    throw new InvalidStateException();
+                }
             }
 
-            var currentHealth1 = reader.ReadSingle(); // These two values
-            var currentHealth2 = reader.ReadSingle(); // are almost but not quite the same.
+            reader.PersistEnum(ref _damageType);
+            reader.PersistFrame(ref _unknownFrame1);
 
-            var maxHealth1 = reader.ReadSingle();
-            var maxHealth2 = reader.ReadSingle();
-            if (maxHealth1 != maxHealth2)
-            {
-                throw new InvalidDataException();
-            }
+            var lastDamageType = (uint)_lastDamageType;
+            reader.PersistUInt32(ref lastDamageType);
+            _lastDamageType = (DamageType)lastDamageType; // -1 if no last damage
 
-            var unknown = reader.ReadBytes(61);
+            reader.PersistObject(ref _lastDamage);
+            reader.PersistLogicFrame(ref _lastDamagedAt);
+            reader.PersistFrame(ref _unknownFrame3);
+
+            reader.SkipUnknownBytes(2);
+
+            reader.PersistBoolean(ref _unknownBool);
+            reader.PersistBoolean(ref _indestructible);
+
+            reader.PersistList(
+                _particleSystemIds,
+                static (StatePersister persister, ref uint item) =>
+                {
+                    persister.PersistUInt32Value(ref item);
+                });
+
+            reader.PersistBitArray(ref _armorSetConditions);
         }
     }
 
@@ -135,7 +208,7 @@ namespace OpenSage.Logic.Object
 
         public float MaxHealth { get; private set; }
         public float? InitialHealth { get; private set; }
-       
+
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public int SubdualDamageCap { get; private set; }
 
@@ -162,7 +235,7 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.Bfme)]
         public float MaxHealthReallyDamaged { get; private set; }
-        
+
         [AddedIn(SageGame.Bfme)]
         public string GrabFX { get; private set; }
 
@@ -196,9 +269,9 @@ namespace OpenSage.Logic.Object
         [AddedIn(SageGame.Bfme2Rotwk)]
         public string ReallyDamagedAttributeModifier { get; private set; }
 
-        internal override BodyModule CreateBodyModule(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new ActiveBody(gameObject, this);
+            return new ActiveBody(gameObject, context, this);
         }
     }
 

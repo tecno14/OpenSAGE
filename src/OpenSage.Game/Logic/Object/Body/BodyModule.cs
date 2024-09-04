@@ -1,15 +1,23 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
+using FixedMath.NET;
 using ImGuiNET;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
-using OpenSage.Mathematics.FixedMath;
+using OpenSage.Diagnostics.Util;
 
 namespace OpenSage.Logic.Object
 {
     public abstract class BodyModule : BehaviorModule
     {
+        private float _armorDamageScalar;
+
+        protected GameObject GameObject { get; }
+
+        protected BodyModule(GameObject gameObject)
+        {
+            GameObject = gameObject;
+        }
+
         public Fix64 Health { get; internal set; }
 
         public abstract Fix64 MaxHealth { get; internal set; }
@@ -18,18 +26,26 @@ namespace OpenSage.Logic.Object
 
         public virtual void SetInitialHealth(float multiplier) { }
 
-        public virtual void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, TimeInterval time) { }
+        public virtual void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, GameObject damageDealer) { }
 
-        internal override void Load(BinaryReader reader)
+        public virtual void Heal(Fix64 amount) { }
+
+        public virtual void Heal(Fix64 amount, GameObject healer) { }
+
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistSingle(ref _armorDamageScalar); // was roughly 0.9 after changing to hold the line
         }
+
+        private DamageType _inspectorDamageType = DamageType.Explosion;
+        private float _inspectorDamageAmount;
+        private DeathType _inspectorDeathType = DeathType.Normal;
 
         internal override void DrawInspector()
         {
@@ -44,12 +60,24 @@ namespace OpenSage.Logic.Object
             {
                 Health = (Fix64) health;
             }
+
+            ImGui.Separator();
+
+            ImGuiUtility.ComboEnum("Damage Type", ref _inspectorDamageType);
+            ImGui.InputFloat("Damage Amount", ref _inspectorDamageAmount);
+            ImGuiUtility.ComboEnum("Death Type", ref _inspectorDeathType);
+            if (ImGui.Button("Apply Damage"))
+            {
+                GameObject.DoDamage(_inspectorDamageType, (Fix64) _inspectorDamageAmount, _inspectorDeathType, null);
+            }
         }
     }
 
     public abstract class BodyModuleData : BehaviorModuleData
     {
-        internal static BodyModuleData ParseBody(IniParser parser) => ParseModule(parser, BodyParseTable);
+        public override ModuleKinds ModuleKinds => ModuleKinds.Body;
+
+        internal static ModuleDataContainer ParseBody(IniParser parser, ModuleInheritanceMode inheritanceMode) => ParseModule(parser, BodyParseTable, inheritanceMode);
 
         private static readonly Dictionary<string, Func<IniParser, BodyModuleData>> BodyParseTable = new Dictionary<string, Func<IniParser, BodyModuleData>>
         {
@@ -67,12 +95,5 @@ namespace OpenSage.Logic.Object
             { "SymbioticStructuresBody", SymbioticStructuresBodyModuleData.Parse },
             { "UndeadBody", UndeadBodyModuleData.Parse },
         };
-
-        internal sealed override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
-        {
-            throw new InvalidOperationException();
-        }
-
-        internal virtual BodyModule CreateBodyModule(GameObject gameObject) => null; // TODO: Make this abstract.
     }
 }

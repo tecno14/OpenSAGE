@@ -4,7 +4,7 @@ using OpenSage.Content;
 using OpenSage.Data;
 using OpenSage.Gui;
 using OpenSage.Gui.ControlBar;
-using OpenSage.Gui.UnitOverlay;
+using OpenSage.Gui.CommandListOverlay;
 using OpenSage.Gui.Wnd;
 using OpenSage.Mods.Generals.Gui;
 
@@ -37,14 +37,18 @@ namespace OpenSage.Mods.Generals
 
         public IMainMenuSource MainMenu { get; } = new WndMainMenuSource(@"Menus\MainMenu.wnd");
         public IControlBarSource ControlBar { get; } = new GeneralsControlBarSource();
-        public IUnitOverlaySource UnitOverlay => null;
+        public ICommandListOverlaySource CommandListOverlay => null;
 
         public uint ScriptingTicksPerSecond => 30;
+
+        public string GetLocalizedStringsPath(string language) => Path.Combine("Data", language, "generals");
 
         public OnDemandAssetLoadStrategy CreateAssetLoadStrategy()
         {
             return new OnDemandAssetLoadStrategy(PathResolvers.W3d, PathResolvers.GeneralsTexture);
         }
+
+        public Scene25D CreateScene25D(Scene3D scene3D, AssetStore assetStore) => new GeneralsScene25D(scene3D, assetStore);
 
         public bool Probe(string directory)
         {

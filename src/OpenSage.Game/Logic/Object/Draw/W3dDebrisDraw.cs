@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
+using OpenSage.Client;
 using OpenSage.Data.Ini;
 using OpenSage.Graphics;
 using OpenSage.Graphics.Cameras;
@@ -12,11 +13,18 @@ namespace OpenSage.Logic.Object
 {
     public sealed class W3dDebrisDraw : DrawModule
     {
+        private readonly W3dDebrisDrawModuleData _data;
         private readonly GameContext _gameContext;
         private ModelInstance _modelInstance;
 
-        internal W3dDebrisDraw(GameContext context)
+        private string _modelName;
+        private uint _unknownInt1;
+        private uint _unknownInt2;
+        private bool _unknownBool;
+
+        internal W3dDebrisDraw(W3dDebrisDrawModuleData data, GameContext context)
         {
+            _data = data;
             _gameContext = context;
         }
 
@@ -34,13 +42,15 @@ namespace OpenSage.Logic.Object
                 Camera camera,
                 bool castsShadow,
                 MeshShaderResources.RenderItemConstantsPS renderItemConstantsPS,
-                List<string> hiddenSubObjects = null)
+                Dictionary<string, bool> shownSubObjects = null,
+                Dictionary<string, bool> hiddenSubObjects = null)
         {
             _modelInstance.BuildRenderList(
                 renderList,
                 camera,
                 castsShadow,
                 renderItemConstantsPS,
+                shownSubObjects,
                 hiddenSubObjects);
         }
 
@@ -68,6 +78,23 @@ namespace OpenSage.Logic.Object
         {
             _modelInstance.Update(time);
         }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistAsciiString(ref _modelName);
+
+            reader.SkipUnknownBytes(7);
+
+            reader.PersistUInt32(ref _unknownInt1);
+            reader.PersistUInt32(ref _unknownInt2);
+            reader.PersistBoolean(ref _unknownBool);
+        }
     }
 
     /// <summary>
@@ -81,9 +108,9 @@ namespace OpenSage.Logic.Object
 
         internal static readonly IniParseTable<W3dDebrisDrawModuleData> FieldParseTable = new IniParseTable<W3dDebrisDrawModuleData>();
 
-        internal override DrawModule CreateDrawModule(GameObject gameObject, GameContext context)
+        internal override DrawModule CreateDrawModule(Drawable drawable, GameContext context)
         {
-            return new W3dDebrisDraw(context);
+            return new W3dDebrisDraw(this, context);
         }
     }
 }

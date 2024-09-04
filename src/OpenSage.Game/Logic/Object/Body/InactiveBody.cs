@@ -1,28 +1,34 @@
-﻿using OpenSage.Data.Ini;
-using OpenSage.Mathematics.FixedMath;
+﻿using FixedMath.NET;
+using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
     public sealed class InactiveBody : BodyModule
     {
-        private readonly GameObject _gameObject;
-
-        internal InactiveBody(GameObject gameObject)
+        internal InactiveBody(GameObject gameObject) : base(gameObject)
         {
-            _gameObject = gameObject;
         }
 
-        public override void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, TimeInterval time)
+        public override void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, GameObject damageDealer)
         {
             // TODO
 
-            _gameObject.Die(deathType, time);
+            GameObject.Die(deathType);
         }
-        
+
         public override Fix64 MaxHealth
         {
             get => Fix64.Zero;
             internal set { }
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
         }
     }
 
@@ -35,7 +41,7 @@ namespace OpenSage.Logic.Object
 
         private static readonly IniParseTable<InactiveBodyModuleData> FieldParseTable = new IniParseTable<InactiveBodyModuleData>();
 
-        internal override BodyModule CreateBodyModule(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
             return new InactiveBody(gameObject);
         }

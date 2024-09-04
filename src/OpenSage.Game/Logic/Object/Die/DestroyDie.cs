@@ -1,34 +1,28 @@
-﻿using System.IO;
-using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+﻿using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
     public sealed class DestroyDie : DieModule
     {
         private readonly GameObject _gameObject;
-        private readonly DestroyDieModuleData _moduleData;
 
-        internal DestroyDie(GameObject gameObject, DestroyDieModuleData moduleData)
+        internal DestroyDie(GameObject gameObject, DestroyDieModuleData moduleData) : base(moduleData)
         {
             _gameObject = gameObject;
-            _moduleData = moduleData;
         }
 
-        internal override void OnDie(BehaviorUpdateContext context, DeathType deathType)
+        private protected override void Die(BehaviorUpdateContext context, DeathType deathType)
         {
-            _gameObject.Destroy();
+            context.GameContext.GameLogic.DestroyObject(_gameObject);
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 

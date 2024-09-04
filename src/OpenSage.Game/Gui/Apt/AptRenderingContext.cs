@@ -80,7 +80,10 @@ namespace OpenSage.Gui.Apt
                 _clipMaskDrawingContext.Begin(
                     _commandList,
                     _graphicsLoadContext.StandardGraphicsResources.LinearClampSampler,
-                    new SizeF(renderTarget.ColorTarget.Width, renderTarget.ColorTarget.Height));
+                    new SizeF(renderTarget.ColorTarget.Width, renderTarget.ColorTarget.Height),
+                    // TODO: Pass correct time here
+                    TimeInterval.Zero
+                );
 
                 _activeDrawingContext = _clipMaskDrawingContext;
             }
@@ -127,19 +130,19 @@ namespace OpenSage.Gui.Apt
             _drawingContext.SetAlphaMask(renderTarget?.ColorTarget);
         }
 
-        public void RenderText(Text text)
+        public void RenderText(Text character, string actualText)
         {
-            var font = _contentManager.FontManager.GetOrCreateFont("Arial", text.FontHeight, FontWeight.Normal);
+            var font = _contentManager.FontManager.GetOrCreateFont("Arial", character.FontHeight, FontWeight.Normal);
 
             var transform = _transformStack.Peek();
             CalculateTransform(ref transform);
 
             _drawingContext.DrawText(
-                text.Content,
+                actualText,
                 font,
                 TextAlignment.Center,
-                text.Color.ToColorRgbaF() * transform.ColorTransform,
-                RectangleF.Transform(text.Bounds, transform.GeometryRotation));
+                transform.TransformColor(character.Color.ToColorRgbaF()),
+                RectangleF.Transform(character.Bounds, transform.GeometryRotation));
         }
 
         public Matrix3x2 GetCurrentTransformMatrix()
@@ -194,7 +197,7 @@ namespace OpenSage.Gui.Apt
                 {
                     case GeometryLines l:
                         {
-                            var color = l.Color.ToColorRgbaF() * transform.ColorTransform;
+                            var color = transform.TransformColor(l.Color.ToColorRgbaF());
                             foreach (var line in l.Lines)
                             {
                                 _activeDrawingContext.DrawLine(
@@ -207,7 +210,7 @@ namespace OpenSage.Gui.Apt
 
                     case GeometrySolidTriangles st:
                         {
-                            var color = st.Color.ToColorRgbaF() * transform.ColorTransform;
+                            var color = transform.TransformColor(st.Color.ToColorRgbaF());
                             foreach (var tri in st.Triangles)
                             {
                                 if (solidTexture == null)
@@ -254,12 +257,12 @@ namespace OpenSage.Gui.Apt
                                 //    throw new NotImplementedException();
 
                                 var tex = _aptContext.GetTexture(tt.Image, shape);
-
+                                var tintColor = transform.TransformColor(ColorRgbaF.White);
                                 _activeDrawingContext.FillTriangle(
                                     tex,
                                     Triangle2D.Transform(tri, coordinatesTransform),
                                     Triangle2D.Transform(tri, matrix),
-                                    transform.ColorTransform);
+                                    tintColor);
                             }
                             break;
                         }

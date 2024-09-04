@@ -1,27 +1,37 @@
-﻿using System.IO;
+﻿using OpenSage.Content;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class UnpauseSpecialPowerUpgrade : UpgradeModule
+    internal sealed class UnpauseSpecialPowerUpgrade : UpgradeModule
     {
+        private readonly UnpauseSpecialPowerUpgradeModuleData _moduleData;
+
         internal UnpauseSpecialPowerUpgrade(GameObject gameObject, UnpauseSpecialPowerUpgradeModuleData moduleData)
             : base(gameObject, moduleData)
         {
+            _moduleData = moduleData;
         }
 
-        // TODO
-
-        internal override void Load(BinaryReader reader)
+        protected override void OnUpgrade()
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
+            var powerToUnpause = _moduleData.SpecialPowerTemplate.Value;
+            foreach (var specialPowerModule in _gameObject.FindBehaviors<SpecialPowerModule>())
             {
-                throw new InvalidDataException();
+                if (specialPowerModule.Matches(powerToUnpause))
+                {
+                    specialPowerModule.Unpause();
+                }
             }
+        }
 
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 
@@ -32,11 +42,11 @@ namespace OpenSage.Logic.Object
         private static new readonly IniParseTable<UnpauseSpecialPowerUpgradeModuleData> FieldParseTable = UpgradeModuleData.FieldParseTable
             .Concat(new IniParseTable<UnpauseSpecialPowerUpgradeModuleData>
             {
-                { "SpecialPowerTemplate", (parser, x) => x.SpecialPowerTemplate = parser.ParseAssetReference() },
+                { "SpecialPowerTemplate", (parser, x) => x.SpecialPowerTemplate = parser.ParseSpecialPowerReference() },
                 { "ObeyRechageOnTrigger", (parser, x) => x.ObeyRechageOnTrigger = parser.ParseBoolean() },
             });
 
-        public string SpecialPowerTemplate { get; private set; }
+        public LazyAssetReference<SpecialPower> SpecialPowerTemplate { get; private set; }
 
         [AddedIn(SageGame.Bfme2)]
         public bool ObeyRechageOnTrigger { get; private set; }

@@ -1,4 +1,6 @@
-﻿using OpenSage.Content;
+﻿using System;
+using OpenSage.Audio;
+using OpenSage.Content;
 using OpenSage.Data.Ini;
 using OpenSage.Gui;
 
@@ -18,10 +20,10 @@ namespace OpenSage.Logic.Object
             { "Type", (parser, x) => x.Type = parser.ParseEnum<UpgradeType>() },
             { "DisplayName", (parser, x) => x.DisplayName = parser.ParseLocalizedStringKey() },
             { "Tooltip", (parser, x) => x.Tooltip = parser.ParseLocalizedStringKey() },
-            { "BuildTime", (parser, x) => x.BuildTime = parser.ParseFloat() },
+            { "BuildTime", (parser, x) => x.BuildTime = parser.ParseTimeSecondsToLogicFrames() },
             { "BuildCost", (parser, x) => x.BuildCost = parser.ParseFloat() },
             { "ButtonImage", (parser, x) => x.ButtonImage = parser.ParseMappedImageReference() },
-            { "ResearchSound", (parser, x) => x.ResearchSound = parser.ParseAssetReference() },
+            { "ResearchSound", (parser, x) => x.ResearchSound = parser.ParseAudioEventReference() },
             { "UnitSpecificSound", (parser, x) => x.UnitSpecificSound = parser.ParseAssetReference() },
             { "AcademyClassify", (parser, x) => x.AcademyClassify = parser.ParseEnum<AcademyType>() },
             { "Cursor", (parser, x) => x.Cursor = parser.ParseAssetReference() },
@@ -44,16 +46,28 @@ namespace OpenSage.Logic.Object
             { "GroupOrder", (parser, x) => x.GroupOrder = parser.ParseInteger() }
         };
 
+        internal static UpgradeTemplate CreateVeterancyUpgradeTemplate(VeterancyLevel veterancyLevel)
+        {
+            var result = new UpgradeTemplate
+            {
+                Type = UpgradeType.Object
+            };
+
+            result.SetNameAndInstanceId("Upgrade", $"Upgrade_Veterancy_{veterancyLevel.ToString().ToUpperInvariant()}");
+
+            return result;
+        }
+
         public UpgradeType Type { get; private set; } = UpgradeType.Player;
         public string DisplayName { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
         public string Tooltip { get; private set; }
 
-        public float BuildTime { get; private set; }
+        public LogicFrameSpan BuildTime { get; private set; }
         public float BuildCost { get; private set; }
         public LazyAssetReference<MappedImage> ButtonImage { get; private set; }
-        public string ResearchSound { get; private set; }
+        public LazyAssetReference<BaseAudioEventInfo> ResearchSound { get; private set; }
         public string UnitSpecificSound { get; private set; }
 
         [AddedIn(SageGame.CncGeneralsZeroHour)]
@@ -112,6 +126,40 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.Bfme2)]
         public int GroupOrder { get; private set; }
+
+        internal void GrantUpgrade(GameObject gameObject)
+        {
+            switch (Type)
+            {
+                case UpgradeType.Player:
+                    gameObject.Owner.AddUpgrade(this, UpgradeStatus.Completed);
+                    break;
+
+                case UpgradeType.Object:
+                    gameObject.Upgrade(this);
+                    break;
+
+                default:
+                    throw new InvalidOperationException();
+            }
+        }
+
+        internal void RemoveUpgrade(GameObject gameObject)
+        {
+            switch (Type)
+            {
+                case UpgradeType.Player:
+                    gameObject.Owner.RemoveUpgrade(this);
+                    break;
+
+                case UpgradeType.Object:
+                    gameObject.RemoveUpgrade(this);
+                    break;
+
+                default:
+                    throw new InvalidOperationException();
+            }
+        }
     }
 
     public enum UpgradeType
@@ -146,5 +194,20 @@ namespace OpenSage.Logic.Object
 
         [IniEnum("AI_UPGRADEHEURISTIC_ANTIINFANTRY"), AddedIn(SageGame.Bfme2Rotwk)]
         Antiinfantry,
+    }
+
+    public sealed class UpgradeManager
+    {
+        internal static void Initialize(AssetStore assetStore)
+        {
+            CreateVeterancyUpgrade(assetStore, VeterancyLevel.Veteran);
+            CreateVeterancyUpgrade(assetStore, VeterancyLevel.Elite);
+            CreateVeterancyUpgrade(assetStore, VeterancyLevel.Heroic);
+        }
+
+        private static void CreateVeterancyUpgrade(AssetStore assetStore, VeterancyLevel veterancyLevel)
+        {
+            assetStore.Upgrades.Add(UpgradeTemplate.CreateVeterancyUpgradeTemplate(veterancyLevel));
+        }
     }
 }

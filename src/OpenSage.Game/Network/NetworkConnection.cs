@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Numerics;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using LiteNetLib;
@@ -15,35 +14,41 @@ using OpenSage.Network.Packets;
 
 namespace OpenSage.Network
 {
-    public sealed class NetworkConnection : EchoConnection
+    public sealed class ClientNetworkConnection : NetworkConnection
     {
-        private const int OrderSchedulingOffsetInFrames = 2;
+        private IPAddress _hostAddress;
 
-        private EventBasedNetListener _listener;
-        private NetManager _manager;
-        private NetPacketProcessor _processor;
-        private NetDataWriter _writer;
-        private Dictionary<uint, int> _receivedPacketsPerFrame = new Dictionary<uint, int>();
-
-        private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
-
-        public NetworkConnection()
+        public ClientNetworkConnection(SkirmishGameSettings game): base(game)
         {
-            _listener = new EventBasedNetListener();
-            _manager = new NetManager(_listener)
+            _hostAddress = game.Slots[0].EndPoint.Address;
+        }
+
+        public override Task InitializeAsync()
+        {
+            if (!_manager.Start(Ports.AnyAvailable))
             {
-                ReuseAddress = true,
-                IPv6Enabled = IPv6Mode.Disabled, // TODO: temporary
+                Logger.Error("Failed to initialize network connection");
             };
 
-            if (Debugger.IsAttached)
+            var host = new IPEndPoint(_hostAddress, Ports.SkirmishGame);
+            Logger.Trace($"Initializing network connection from port {_manager.LocalPort} to {host}");
+            _manager.Connect(host, string.Empty);
+
+            return Task.Run(async () =>
             {
-                _manager.DisconnectTimeout = 600000;
-            }
+                while (_manager.ConnectedPeersCount < 1)
+                {
+                    _manager.PollEvents();
+                    await Task.Delay(10);
+                }
+            });
+        }
+    }
 
-            _listener.PeerConnectedEvent += peer => Logger.Trace($"{peer.EndPoint} connected");
-            _listener.PeerDisconnectedEvent += (peer, info) => Logger.Trace($"{peer.EndPoint} disconnected with reason {info.Reason}");
-
+    public sealed class HostNetworkConnection : NetworkConnection
+    {
+        public HostNetworkConnection(SkirmishGameSettings game) : base(game)
+        {
             _listener.ConnectionRequestEvent += request =>
             {
                 Logger.Trace($"Accepting connection from {request.RemoteEndPoint}");
@@ -52,61 +57,97 @@ namespace OpenSage.Network
 
                 Logger.Trace($"Accept result: {peer}");
             };
-
-            _listener.NetworkReceiveEvent += (NetPeer peer, NetPacketReader reader, DeliveryMethod deliveryMethod) => _processor.ReadAllPackets(reader);
-
-            _writer = new NetDataWriter();
-            _processor = new NetPacketProcessor();            
-            _processor.RegisterNestedType<Order>(WriteOrder, ReadOrder);
-            _processor.Subscribe<SkirmishOrderPacket>(packet =>
-            {
-                if (_receivedPacketsPerFrame.TryGetValue(packet.Frame, out int count))
-                {
-                    count++;
-                }
-                else
-                {
-                    _receivedPacketsPerFrame.Add(packet.Frame, 1);
-                }
-
-                StorePacket(packet);
-            },
-            () => new SkirmishOrderPacket());
         }
 
-        public Task InitializeAsync(Game game)
+        public override Task InitializeAsync()
         {
-            // TODO the same code is used in SkirmishManager
-            if (game.Configuration.LanIpAddress != IPAddress.Any)
+            if (!_manager.Start(Ports.SkirmishGame))
             {
-                Logger.Trace($"Initializing network connection using configured IP Address { game.Configuration.LanIpAddress }");
-                _manager.Start(game.Configuration.LanIpAddress, IPAddress.IPv6Any, Ports.SkirmishGame + game.SkirmishManager.SkirmishGame.LocalSlotIndex); // TODO: what about IPV6
-            }
-            else
-            {
-                Logger.Trace($"Initializing network connection using default IP Address: {Ports.SkirmishGame + game.SkirmishManager.SkirmishGame.LocalSlotIndex}.");
-                _manager.Start(Ports.SkirmishGame + game.SkirmishManager.SkirmishGame.LocalSlotIndex);
-            }
-
-            _listener.PeerConnectedEvent += peer => Logger.Trace($"Connected to {peer.EndPoint}"); ;
-
-            foreach (var slot in game.SkirmishManager.SkirmishGame.Slots)
-            {
-                if (slot.State == SkirmishSlotState.Human && slot.Index > game.SkirmishManager.SkirmishGame.LocalSlotIndex)
-                {
-                    Logger.Trace($"Connecting to {slot.EndPoint.Address}:{Ports.SkirmishGame + slot.Index}");
-                    _manager.Connect(slot.EndPoint.Address.ToString(), Ports.SkirmishGame + slot.Index, string.Empty);
-                }
-            }
+                Logger.Error("Failed to initialize network connection");
+            };
 
             return Task.Run(async () =>
             {
-                while (_manager.ConnectedPeersCount < game.SkirmishManager.SkirmishGame.Slots.Count(s => s.State == SkirmishSlotState.Human) - 1)
+                while (_manager.ConnectedPeersCount < _numberOfOtherPlayers)
                 {
                     _manager.PollEvents();
                     await Task.Delay(10);
                 }
             });
+        }
+
+        protected override void ProcessOrderPacket(SkirmishOrderPacket packet, NetPeer sender)
+        {
+            DistributePacketToOtherClients(packet, sender);
+            base.ProcessOrderPacket(packet, sender);
+        }
+
+        private void DistributePacketToOtherClients(SkirmishOrderPacket packet, NetPeer sender)
+        {
+            _writer.Reset();
+            _processor.Write(_writer, packet);
+            foreach (var peer in _manager.ConnectedPeerList)
+            {
+                if (peer != sender)
+                {
+                    Logger.Trace($"  Redistributing to {peer}");
+                    peer.Send(_writer, DeliveryMethod.ReliableUnordered);
+                }
+            }
+        }
+    }
+
+    public abstract class NetworkConnection : EchoConnection
+    {
+        protected const int OrderSchedulingOffsetInFrames = 2;
+
+        protected EventBasedNetListener _listener;
+        protected NetManager _manager;
+        protected NetPacketProcessor _processor;
+        protected NetDataWriter _writer;
+        protected Dictionary<uint, int> _receivedPacketsPerFrame = new Dictionary<uint, int>();
+
+        protected int _numberOfOtherPlayers;
+
+        protected static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+
+        public NetworkConnection(SkirmishGameSettings game)
+        {
+            _numberOfOtherPlayers = game.Slots.Count(s => s.State == SkirmishSlotState.Human) - 1;
+            _listener = new EventBasedNetListener();
+            _manager = new NetManager(_listener);
+
+            if (Debugger.IsAttached)
+            {
+                _manager.DisconnectTimeout = 600000;
+            }
+
+            _listener.PeerConnectedEvent += peer => Logger.Trace($"{peer} connected");
+            _listener.PeerDisconnectedEvent += (peer, info) => Logger.Trace($"{peer} disconnected with reason {info.Reason}");
+            _listener.NetworkReceiveEvent += (NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod deliveryMethod) => _processor.ReadAllPackets(reader, peer);
+
+            _writer = new NetDataWriter();
+            _processor = new NetPacketProcessor();
+            _processor.RegisterNestedType<Order>(WriteOrder, ReadOrder);
+            _processor.Subscribe<SkirmishOrderPacket, NetPeer>(ReceiveOrderPacket, () => new SkirmishOrderPacket());
+        }
+
+        public abstract Task InitializeAsync();
+
+        private void ReceiveOrderPacket(SkirmishOrderPacket packet, NetPeer sender)
+        {
+            Logger.Trace($"Received packet for frame {packet.Frame} from {sender}");
+            ProcessOrderPacket(packet, sender);
+        }
+
+        protected virtual void ProcessOrderPacket(SkirmishOrderPacket packet, NetPeer sender)
+        {
+            _receivedPacketsPerFrame.TryGetValue(packet.Frame, out int count);
+            _receivedPacketsPerFrame[packet.Frame] = count + 1;
+
+            Logger.Trace($"  Packet count for frame {packet.Frame} is now {count + 1}");
+
+            StorePacket(packet);
         }
 
         public override void Receive(uint frame, Action<uint, Order> packetFn)
@@ -118,9 +159,10 @@ namespace OpenSage.Network
                 return;
             }
 
-            while (!_receivedPacketsPerFrame.TryGetValue(frame, out var count) || count < _manager.ConnectedPeersCount)
+            while (!_receivedPacketsPerFrame.TryGetValue(frame, out var count) || count < _numberOfOtherPlayers)
             {
                 _manager.PollEvents();
+                Thread.Sleep(1);
             }
 
             base.Receive(frame, packetFn);
@@ -131,16 +173,17 @@ namespace OpenSage.Network
         public override void Send(uint frame, List<Order> orders)
         {
             var scheduledFrame = frame + OrderSchedulingOffsetInFrames;
+            Logger.Trace($"Frame {frame}: Sending {orders.Count} for frame {scheduledFrame}");
 
-            base.Send(scheduledFrame, orders);
-
-            _writer.Reset();
             var packet = new SkirmishOrderPacket()
             {
                 Frame = scheduledFrame,
                 Orders = orders
             };
 
+            StorePacket(packet);
+
+            _writer.Reset();
             _processor.Write(_writer, packet);
             _manager.SendToAll(_writer, DeliveryMethod.ReliableOrdered);
         }

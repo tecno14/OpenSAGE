@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using ImGuiNET;
+using OpenSage.Client;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
 using OpenSage.Graphics;
@@ -20,20 +21,17 @@ namespace OpenSage.Logic.Object
         private readonly W3dModelDrawModuleData _data;
         private readonly GameContext _context;
 
-        protected readonly GameObject GameObject;
-
-        private readonly List<IConditionState> _conditionStates;
-        private readonly ModelConditionState _defaultConditionState;
-
-        private readonly List<IConditionState> _animationStates;
-        private readonly AnimationState _idleAnimationState;
-
-        private readonly Dictionary<ModelConditionState, W3dModelDrawConditionState> _cachedModelDrawConditionStates;
-
         private ModelConditionState _activeConditionState;
-        private AnimationState _activeAnimationState;
+        protected AnimationState _activeAnimationState;
 
         private W3dModelDrawConditionState _activeModelDrawConditionState;
+
+        private readonly List<W3dModelDrawSomething>[] _unknownSomething;
+        private bool _hasUnknownThing;
+        private int _unknownInt;
+        private float _unknownFloat;
+
+        public AnimationState PreviousAnimationState { get; private set; }
 
         protected ModelInstance ActiveModelInstance => _activeModelDrawConditionState.Model;
 
@@ -41,227 +39,259 @@ namespace OpenSage.Logic.Object
         {
             get
             {
-                yield return _defaultConditionState.ConditionFlags;
-
-                foreach (var conditionState in _conditionStates)
+                foreach (var conditionState in _data.ConditionStates)
                 {
-                    yield return conditionState.ConditionFlags;
+                    foreach (var conditionStateFlags in conditionState.ConditionFlags)
+                    {
+                        yield return conditionStateFlags;
+                    }
                 }
 
-                foreach (var animationState in _animationStates)
+                foreach (var animationState in _data.AnimationStates)
                 {
-                    yield return animationState.ConditionFlags;
+                    foreach (var animationStateFlags in animationState.ConditionFlags)
+                    {
+                        yield return animationStateFlags;
+                    }
                 }
             }
         }
 
         internal override string GetWeaponFireFXBone(WeaponSlot slot)
-            => _defaultConditionState?.WeaponFireFXBones.Find(x => x.WeaponSlot == slot)?.BoneName;
+            => _activeConditionState?.WeaponFireFXBones.Find(x => x.WeaponSlot == slot)?.BoneName;
 
         internal override string GetWeaponLaunchBone(WeaponSlot slot)
-            => _defaultConditionState?.WeaponLaunchBones.Find(x => x.WeaponSlot == slot)?.BoneName;
+            => _activeConditionState?.WeaponLaunchBones.Find(x => x.WeaponSlot == slot)?.BoneName;
 
         internal W3dModelDraw(
             W3dModelDrawModuleData data,
-            GameObject gameObject,
+            Drawable drawable,
             GameContext context)
         {
             _data = data;
-            GameObject = gameObject;
+            Drawable = drawable;
             _context = context;
 
-            _conditionStates = new List<IConditionState>();
+            UpdateConditionState(new BitArray<ModelConditionFlag>(), context.Random);
 
-            if (data.DefaultConditionState != null)
+            _unknownSomething = new List<W3dModelDrawSomething>[3];
+            for (var i = 0; i < _unknownSomething.Length; i++)
             {
-                _defaultConditionState = data.DefaultConditionState;
+                _unknownSomething[i] = new List<W3dModelDrawSomething>();
             }
-
-            foreach (var conditionState in data.ConditionStates)
-            {
-                _conditionStates.Add(conditionState);
-            }
-
-            if (_defaultConditionState == null)
-            {
-                _defaultConditionState = (ModelConditionState)_conditionStates.Find(x => !x.ConditionFlags.AnyBitSet);
-
-                if (_defaultConditionState != null)
-                {
-                    _conditionStates.Remove(_defaultConditionState);
-                }
-                else
-                {
-                    throw new InvalidOperationException();
-                }
-            }
-
-            _cachedModelDrawConditionStates = new Dictionary<ModelConditionState, W3dModelDrawConditionState>();
-
-            SetActiveConditionState(_defaultConditionState, context.Random);
-
-            _animationStates = new List<IConditionState>();
-
-            if (data.IdleAnimationState != null)
-            {
-                _idleAnimationState = data.IdleAnimationState;
-            }
-
-            foreach (var animationState in data.AnimationStates)
-            {
-                _animationStates.Add(animationState);
-            }
-        }
-
-        private bool ShouldWaitForRunningAnimationsToFinish(ModelConditionState conditionState)
-        {
-            return _activeConditionState != null
-                && conditionState.WaitForStateToFinishIfPossible != null
-                && _activeConditionState.TransitionKey == conditionState.WaitForStateToFinishIfPossible
-                && (_activeModelDrawConditionState?.StillActive() ?? false);
         }
 
         private void SetActiveConditionState(ModelConditionState conditionState, Random random)
         {
-            if (_activeConditionState == conditionState || ShouldWaitForRunningAnimationsToFinish(conditionState))
+            if (_activeConditionState == conditionState || ShouldWaitForRunningAnimationsToFinish())
             {
+                UpdateBoneVisibilities(_activeConditionState, _activeModelDrawConditionState);
+
                 return;
             }
 
-            _activeModelDrawConditionState?.Deactivate();
-
-            if (!_cachedModelDrawConditionStates.TryGetValue(conditionState, out var modelDrawConditionState))
+            if (_activeModelDrawConditionState != null)
             {
-                modelDrawConditionState = AddDisposable(CreateModelDrawConditionStateInstance(conditionState, random));
-                _cachedModelDrawConditionStates.Add(conditionState, modelDrawConditionState);
+                _activeModelDrawConditionState.Deactivate();
+                RemoveAndDispose(ref _activeModelDrawConditionState);
             }
+
+            var modelDrawConditionState = AddDisposable(CreateModelDrawConditionStateInstance(conditionState, random));
 
             _activeConditionState = conditionState;
             _activeModelDrawConditionState = modelDrawConditionState;
 
-            var speedFactor = conditionState.AnimationSpeedFactorRange.GetValue(random);
-            _activeModelDrawConditionState?.Activate(speedFactor);
+            NLog.LogManager.GetCurrentClassLogger().Info($"Set active condition state for {GameObject.Definition.Name}");
         }
 
-        private void SetActiveAnimationState(AnimationState animationState, Random random)
+        private bool ShouldWaitForRunningAnimationsToFinish()
         {
+            return false;
+
+            //return _activeConditionState != null;
+                // TODO
+                //&& animationState.WaitForStateToFinishIfPossible != null
+                //&& _activeConditionState.TransitionKey == conditionState.WaitForStateToFinishIfPossible
+                //&& (_activeModelDrawConditionState?.StillActive() ?? false);
+        }
+
+        protected virtual bool SetActiveAnimationState(AnimationState animationState, Random random)
+        {
+            if (animationState == _activeAnimationState && (_activeModelDrawConditionState?.StillActive() ?? false))
+            {
+                return false;
+            }
+
+            if (animationState?.Script != null)
+            {
+                _context.Scene3D.Game.Lua.ExecuteDrawModuleLuaCode(this, animationState.Script);
+            }
+
             if (animationState == null
                 || animationState.Animations.Count == 0
                 || _activeModelDrawConditionState == null)
             {
-                return;
+                return true;
             }
 
-            if (_activeModelDrawConditionState.StillActive() == false)
-            {
-                _activeAnimationState = null;
-            }
-            else if (animationState == _activeAnimationState)
-            {
-                return;
-            }
+            PreviousAnimationState = _activeAnimationState;
 
-            _activeAnimationState = animationState;
+            if (_activeModelDrawConditionState?.Model != null)
+            {
+                foreach (var animationInstance in _activeModelDrawConditionState.Model.AnimationInstances)
+                {
+                    animationInstance.Stop();
+                }
+            }
 
             var modelInstance = _activeModelDrawConditionState.Model;
             modelInstance.AnimationInstances.Clear();
+            _activeAnimationState = animationState;
 
             var animationBlock = animationState.Animations[random.Next(0, animationState.Animations.Count - 1)];
-            if (animationBlock != null)
+            var anim = animationBlock?.Animation?.Value;
+            //Check if the animation does really exist
+            if (anim != null)
             {
-                foreach (var animation in animationBlock.Animations)
-                {
-                    var anim = animation.Value;
-                    //Check if the animation does really exist
-                    if (anim != null)
-                    {
-                        var flags = animationState.Flags;
-                        var mode = animationBlock.AnimationMode;
-                        var animationInstance = new AnimationInstance(modelInstance, anim, mode, flags, GameObject);
-                        modelInstance.AnimationInstances.Add(animationInstance);
-                        animationInstance.Play();
-                        break;
-                    }
-                }
+                var flags = animationState.Flags;
+                var mode = animationBlock.AnimationMode;
+                var animationInstance = new AnimationInstance(modelInstance.ModelBoneInstances, anim, mode, flags, GameObject, _context.Random);
+                modelInstance.AnimationInstances.Add(animationInstance);
+                animationInstance.Play(animationBlock.AnimationSpeedFactorRange.GetValue(random));
             }
+
+            NLog.LogManager.GetCurrentClassLogger().Info($"Set active animation state for {GameObject.Definition.Name}");
+
+            return true;
         }
 
-        private IConditionState FindBestFittingConditionState(IConditionState defaultState, List<IConditionState> conditionStates, BitArray<ModelConditionFlag> flags)
+        public void SetTransitionState(string state)
         {
-            var bestConditionState = defaultState;
+            var transitionState = _data.TransitionStates.FirstOrDefault(x => x.StateName == state);
+            SetActiveAnimationState(transitionState, _context.Random);
+        }
+
+        internal static T FindBestFittingConditionState<T>(List<T> conditionStates, BitArray<ModelConditionFlag> flags)
+            where T : IConditionState
+        {
+            // prefer exact match
+            // if not, find the first one with the most number of matching bits
+            // this may be convoluted, but the unit tests pass!
+            T bestConditionState = default;
             var bestIntersections = 0;
-            var bestBitCount = 0;
+            T bestContainedConditionState = default;
+            var leastMissing = int.MaxValue;
+            var leastMissingBestIntersections = 0;
+            T defaultConditionState = default;
 
             foreach (var conditionState in conditionStates)
             {
-                var numStateBits = conditionState.ConditionFlags.NumBitsSet;
-                var numIntersectionBits = conditionState.ConditionFlags.CountIntersectionBits(flags);
-
-                if (numIntersectionBits <= bestIntersections &&
-                    ((numIntersectionBits != bestIntersections) || numStateBits >= bestBitCount))
+                foreach (var conditionStateFlags in conditionState.ConditionFlags)
                 {
-                    continue;
-                }
+                    // the default condition state has no bits set
+                    if (!conditionStateFlags.AnyBitSet)
+                    {
+                        defaultConditionState = conditionState;
+                    }
 
-                bestConditionState = conditionState;
-                bestBitCount = numStateBits;
-                bestIntersections = numIntersectionBits;
+                    var intersections = conditionStateFlags.CountIntersectionBits(flags);
+                    // we've found a state that matches everything we have, but it may have extra things we don't have that we don't want
+                    // the order of the condition states in the ini files is not guaranteed to be ideal
+                    if (intersections == flags.NumBitsSet)
+                    {
+                        var missing = conditionStateFlags.NumBitsSet - intersections;
+                        if (missing == 0)
+                        {
+                            // if we have an exact match, great! doesn't matter what else we've found
+                            return conditionState;
+                        }
+
+                        // otherwise, this state may have extra things we don't have. Cool, but less than ideal... let's keep searching?
+                        // this ensures we don't store the first least missing as better, even if a subsequent one has better best intersections (which should be a better "score")
+                        if (missing < leastMissing || missing == leastMissing && intersections > leastMissingBestIntersections)
+                        {
+                            bestContainedConditionState = conditionState;
+                            leastMissing = missing;
+                            leastMissingBestIntersections = intersections;
+                        }
+                    } else if (intersections > bestIntersections)
+                    {
+                        // not an exact match, but save this if we can't find an exact match
+                        bestIntersections = conditionStateFlags.NumBitsSet;
+                        bestConditionState = conditionState;
+                    }
+                }
             }
 
-            return bestConditionState;
+            return bestContainedConditionState ?? bestConditionState ?? defaultConditionState;
         }
 
         public override void UpdateConditionState(BitArray<ModelConditionFlag> flags, Random random)
         {
-            var bestConditionState = (ModelConditionState)FindBestFittingConditionState(_defaultConditionState, _conditionStates, flags);
+            if (!flags.BitsChanged)
+            {
+                if (!(_activeModelDrawConditionState?.StillActive() ?? false)
+                    && _activeAnimationState != null
+                    && _activeAnimationState.IsIdleAnimation)
+                {
+                    SetActiveAnimationState(_activeAnimationState, random);
+                }
+                return;
+            }
+
+            var bestConditionState = FindBestFittingConditionState(_data.ConditionStates, flags);
             SetActiveConditionState(bestConditionState, random);
 
-            foreach (var weaponMuzzleFlash in bestConditionState.WeaponMuzzleFlashes)
+            if (_activeModelDrawConditionState != null)
             {
-                var visible = flags.Get(ModelConditionFlag.FiringA);
-                for (var i = 0; i < _activeModelDrawConditionState.Model.ModelBoneInstances.Length; i++)
+                foreach (var weaponMuzzleFlash in bestConditionState.WeaponMuzzleFlashes)
                 {
-                    var bone = _activeModelDrawConditionState.Model.ModelBoneInstances[i];
-                    // StartsWith is a bit awkward here, but for instance AVCommance has WeaponMuzzleFlashes = { TurretFX }, and Bones = { TURRETFX01 }
-                    if (bone.Name.StartsWith(weaponMuzzleFlash.BoneName, StringComparison.OrdinalIgnoreCase))
+                    var visible = flags.Get(ModelConditionFlag.FiringA);
+                    for (var i = 0; i < _activeModelDrawConditionState.Model.ModelBoneInstances.Length; i++)
                     {
-                        _activeModelDrawConditionState.Model.BoneVisibilities[i] = visible;
+                        var bone = _activeModelDrawConditionState.Model.ModelBoneInstances[i];
+                        // StartsWith is a bit awkward here, but for instance AVCommance has WeaponMuzzleFlashes = { TurretFX }, and Bones = { TURRETFX01 }
+                        if (bone.Name.StartsWith(weaponMuzzleFlash.BoneName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _activeModelDrawConditionState.Model.BoneVisibilities[i] = visible;
+                        }
                     }
-                }
-            };
+                };
+            }
 
-            var bestAnimationState = (AnimationState) FindBestFittingConditionState(_idleAnimationState, _animationStates, flags);
+            var bestAnimationState = FindBestFittingConditionState(_data.AnimationStates, flags);
             SetActiveAnimationState(bestAnimationState, random);
+        }
+
+        private void UpdateBoneVisibilities(ModelConditionState conditionState, W3dModelDrawConditionState drawState)
+        {
+            var model = conditionState.Model?.Value;
+            if (model == null) return;
+
+            foreach (var subObject in model.SubObjects)
+            {
+                var name = subObject.Name;
+
+                if ((subObject.RenderObject.Hidden && !Drawable.ShownSubObjects.ContainsKey(name))
+                    || Drawable.HiddenSubObjects.ContainsKey(name))
+                {
+                    drawState.Model.BoneVisibilities[subObject.Bone.Index] = false;
+                    continue;
+                }
+
+                drawState.Model.BoneVisibilities[subObject.Bone.Index] = true;
+            }
         }
 
         private W3dModelDrawConditionState CreateModelDrawConditionStateInstance(ModelConditionState conditionState, Random random)
         {
             // Load model, fallback to default model.
-            var model = conditionState.Model?.Value ?? _defaultConditionState.Model?.Value;
+            var model = conditionState.Model?.Value;
             var modelInstance = model?.CreateInstance(_context.AssetLoadContext) ?? null;
 
             if (modelInstance == null)
             {
                 return null;
-            }
-
-            // TODO: since the ModelDrawConditionStates are cached we should find a way to change the animation afterwards
-            var animations = conditionState.ConditionAnimations;
-            if (!conditionState.ConditionFlags.Get(ModelConditionFlag.Moving))
-            {
-                animations.AddRange(conditionState.IdleAnimations);
-            }
-
-            if (animations.Count > 0)
-            {
-                var animation = animations[random.Next(0, animations.Count - 1)]?.Animation.Value;
-                if (animation != null)
-                {
-                    var mode = conditionState.AnimationMode;
-                    var flags = conditionState.Flags;
-                    var animationInstance = new AnimationInstance(modelInstance, animation, mode, flags, GameObject);
-                    modelInstance.AnimationInstances.Add(animationInstance);
-                }
             }
 
             var particleSystems = new List<ParticleSystem>();
@@ -286,30 +316,10 @@ namespace OpenSage.Logic.Object
                     () => ref modelInstance.AbsoluteBoneTransforms[bone.Index]));
             }
 
-            if (conditionState.HideSubObject != null)
-            {
-                foreach (var hideSubObject in conditionState.HideSubObject)
-                {
-                    var item = modelInstance.ModelBoneInstances.Select((value, i) => new { i, value }).FirstOrDefault(x => x.value.Name.EndsWith(hideSubObject.ToUpper()));
-                    if (item != null)
-                    {
-                        modelInstance.BoneVisibilities[item.i] = false;
-                    }
-                }
-            }
-            if (conditionState.ShowSubObject != null)
-            {
-                foreach (var showSubObject in conditionState.ShowSubObject)
-                {
-                    var item = modelInstance.ModelBoneInstances.Select((value, i) => new { i, value }).FirstOrDefault(x => x.value.Name.EndsWith(showSubObject.ToUpper()));
-                    if (item != null)
-                    {
-                        modelInstance.BoneVisibilities[item.i] = true;
-                    }
-                }
-            }
+            var drawState = new W3dModelDrawConditionState(modelInstance, particleSystems, _context);
+            UpdateBoneVisibilities(conditionState, drawState);
 
-            return new W3dModelDrawConditionState(modelInstance, particleSystems, _context);
+            return drawState;
         }
 
         internal override (ModelInstance, ModelBone) FindBone(string boneName)
@@ -317,12 +327,36 @@ namespace OpenSage.Logic.Object
             return (ActiveModelInstance, ActiveModelInstance.Model.BoneHierarchy.Bones.FirstOrDefault(x => string.Equals(x.Name, boneName, StringComparison.OrdinalIgnoreCase)));
         }
 
+        internal ModelBoneInstance FindBoneInstance(string name)
+        {
+            foreach (var bone in ActiveModelInstance.Model.BoneHierarchy.Bones)
+            {
+                if (bone.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return ActiveModelInstance.ModelBoneInstances[bone.Index];
+                }
+            }
+
+            return null;
+        }
+
+        public override void SetAnimationDuration(LogicFrameSpan frames)
+        {
+            var animation = ActiveModelInstance.AnimationInstances.Single();
+
+            var desiredDuration = TimeSpan.FromSeconds(frames.Value / Game.LogicFramesPerSecond);
+
+            var speedFactor = (float)(animation.Duration / desiredDuration);
+
+            animation.SetSpeedFactor(speedFactor);
+        }
+
         internal override void Update(in TimeInterval gameTime)
         {
-            if (_activeConditionState.Flags.HasFlag(AnimationFlags.AdjustHeightByConstructionPercent))
+            if (_activeAnimationState?.Flags.HasFlag(AnimationFlags.AdjustHeightByConstructionPercent) ?? false)
             {
                 var progress = GameObject.BuildProgress;
-                GameObject.VerticalOffset = -((1.0f - progress) * GameObject.Collider.Height);
+                GameObject.VerticalOffset = -((1.0f - progress) * GameObject.Geometry.MaxZ);
             }
 
             _activeModelDrawConditionState?.Update(gameTime);
@@ -342,23 +376,72 @@ namespace OpenSage.Logic.Object
         }
 
         internal override void BuildRenderList(
-                RenderList renderList,
-                Camera camera,
-                bool castsShadow,
-                MeshShaderResources.RenderItemConstantsPS renderItemConstantsPS,
-                List<string> hiddenSubObjects = null)
+            RenderList renderList,
+            Camera camera,
+            bool castsShadow,
+            MeshShaderResources.RenderItemConstantsPS renderItemConstantsPS,
+            Dictionary<string, bool> shownSubObjects = null,
+            Dictionary<string, bool> hiddenSubObjects = null)
         {
             _activeModelDrawConditionState?.BuildRenderList(
                 renderList,
                 camera,
                 castsShadow,
                 renderItemConstantsPS,
+                shownSubObjects,
                 hiddenSubObjects);
         }
 
         internal override void DrawInspector()
         {
-            ImGui.LabelText("Model", _activeModelDrawConditionState?.Model.Model.Name ?? "<null>");
+            foreach (var conditionFlags in _activeConditionState.ConditionFlags)
+            {
+                ImGui.LabelText("ConditionFlags", conditionFlags.DisplayName);
+            }
+
+            _activeModelDrawConditionState?.Model?.DrawInspector();
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(2);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistArray(
+                _unknownSomething,
+                static (StatePersister persister, ref List<W3dModelDrawSomething> item) =>
+                {
+                    persister.PersistListWithByteCountValue(item, static (StatePersister persister, ref W3dModelDrawSomething item) =>
+                    {
+                        persister.PersistObjectValue(ref item);
+                    });
+                });
+
+            reader.SkipUnknownBytes(1);
+
+            reader.PersistBoolean(ref _hasUnknownThing);
+            if (_hasUnknownThing)
+            {
+                reader.PersistInt32(ref _unknownInt);
+                reader.PersistSingle(ref _unknownFloat);
+            }
+        }
+
+        public struct W3dModelDrawSomething : IPersistableObject
+        {
+            public uint UnknownInt;
+            public float UnknownFloat1;
+            public float UnknownFloat2;
+
+            public void Persist(StatePersister persister)
+            {
+                persister.PersistUInt32(ref UnknownInt);
+                persister.PersistSingle(ref UnknownFloat1);
+                persister.PersistSingle(ref UnknownFloat2);
+            }
         }
     }
 
@@ -378,33 +461,17 @@ namespace OpenSage.Logic.Object
 
             _particleSystems = particleSystems;
             _context = context;
+
+            AddDisposeAction(() => Deactivate());
         }
 
-        public void Activate(float speedFactor = 1.0f)
-        {
-            foreach (var animationInstance in Model.AnimationInstances)
-            {
-                animationInstance.Play(speedFactor);
-            }
-
-            foreach (var particleSystem in _particleSystems)
-            {
-                particleSystem.Activate();
-            }
-        }
-
-        public bool StillActive() => Model.AnimationInstances.Any(x => x.IsPlaying());
+        public bool StillActive() => Model.AnimationInstances.Any(x => x.IsPlaying);
 
         public void Deactivate()
         {
-            foreach (var animationInstance in Model.AnimationInstances)
-            {
-                animationInstance.Stop();
-            }
-
             foreach (var particleSystem in _particleSystems)
             {
-                particleSystem.Deactivate();
+                particleSystem.Finish();
             }
         }
 
@@ -423,58 +490,36 @@ namespace OpenSage.Logic.Object
             Camera camera,
             bool castsShadow,
             MeshShaderResources.RenderItemConstantsPS renderItemConstantsPS,
-            List<string> hiddenSubObjects = null)
+            Dictionary<string, bool> shownSubObjects = null,
+            Dictionary<string, bool> hiddenSubObjects = null)
         {
             Model.BuildRenderList(
                 renderList,
                 camera,
                 castsShadow,
                 renderItemConstantsPS,
+                shownSubObjects,
                 hiddenSubObjects);
-        }
-
-        protected override void Dispose(bool disposeManagedResources)
-        {
-            foreach (var particleSystem in _particleSystems)
-            {
-                _context.ParticleSystems.Remove(particleSystem);
-            }
-
-            base.Dispose(disposeManagedResources);
         }
     }
 
-    public class W3dModelDrawModuleData : DrawModuleData
+    public class W3dModelDrawModuleData : DrawModuleData, IParseCallbacks
     {
         internal static W3dModelDrawModuleData ParseModel(IniParser parser) => parser.ParseBlock(FieldParseTable);
 
         internal static readonly IniParseTable<W3dModelDrawModuleData> FieldParseTable = new IniParseTable<W3dModelDrawModuleData>
         {
-            { "DefaultConditionState", (parser, x) => parser.Temp = x.DefaultConditionState = ModelConditionState.ParseDefault(parser) },
-            { "DefaultModelConditionState", (parser, x) => parser.Temp = x.DefaultConditionState = ModelConditionState.ParseDefault(parser) },
+            { "DefaultConditionState", (parser, x) => x.ParseConditionStateGenerals(parser, ParseConditionStateType.Default) },
+            { "ConditionState", (parser, x) => x.ParseConditionStateGenerals(parser, ParseConditionStateType.Normal) },
 
-            {
-                "ConditionState",
-                (parser, x) =>
-                {
-                    var conditionState = ModelConditionState.Parse(parser, x.DefaultConditionState);
-                    x.ConditionStates.Add(conditionState);
-                    parser.Temp = conditionState;
-                }
-            },
-            {
-                "ModelConditionState",
-                (parser, x) =>
-                {
-                    var conditionState = ModelConditionState.Parse(parser, x.DefaultConditionState);
-                    x.ConditionStates.Add(conditionState);
-                    parser.Temp = conditionState;
-                }
-            },
+            { "DefaultModelConditionState", (parser, x) => x.ParseConditionState(parser, ParseConditionStateType.Default) },
+            { "ModelConditionState", (parser, x) => x.ParseConditionState(parser, ParseConditionStateType.Normal) },
 
             { "IgnoreConditionStates", (parser, x) => x.IgnoreConditionStates = parser.ParseEnumBitArray<ModelConditionFlag>() },
             { "AliasConditionState", (parser, x) => x.ParseAliasConditionState(parser) },
-            { "TransitionState", (parser, x) => x.TransitionStates.Add(TransitionState.Parse(parser)) },
+
+            { "TransitionState", (parser, x) => x.ParseTransitionState(parser) },
+
             { "OkToChangeModelColor", (parser, x) => x.OkToChangeModelColor = parser.ParseBoolean() },
             { "ReceivesDynamicLights", (parser, x) => x.ReceivesDynamicLights = parser.ParseBoolean() },
             { "ProjectileBoneFeedbackEnabledSlots", (parser, x) => x.ProjectileBoneFeedbackEnabledSlots = parser.ParseEnumBitArray<WeaponSlot>() },
@@ -490,14 +535,16 @@ namespace OpenSage.Logic.Object
             { "MaxRecoilDistance", (parser, x) => x.MaxRecoilDistance = parser.ParseFloat() },
             { "RecoilSettleSpeed", (parser, x) => x.RecoilSettleSpeed = parser.ParseFloat() },
 
-            { "IdleAnimationState", (parser, x) => x.IdleAnimationState = AnimationState.Parse(parser) },
-            { "AnimationState", (parser, x) => x.AnimationStates.Add(AnimationState.Parse(parser)) },
+            { "IdleAnimationState", (parser, x) => { var animationState = AnimationState.Parse(parser, ParseConditionStateType.Normal); animationState.IsIdleAnimation = true; x.AnimationStates.Add(animationState); } },
+            { "AnimationState", (parser, x) => x.AnimationStates.Add(AnimationState.Parse(parser, ParseConditionStateType.Normal)) },
         };
 
+        private readonly List<ModelConditionStateGenerals> _conditionStatesGenerals = new();
+        private readonly List<TransitionStateGenerals> _transitionStatesGenerals = new();
+
         public BitArray<ModelConditionFlag> IgnoreConditionStates { get; private set; }
-        public ModelConditionState DefaultConditionState { get; private set; }
         public List<ModelConditionState> ConditionStates { get; } = new List<ModelConditionState>();
-        public List<TransitionState> TransitionStates { get; } = new List<TransitionState>();
+        public List<AnimationState> TransitionStates { get; } = new List<AnimationState>();
 
         public bool OkToChangeModelColor { get; private set; }
 
@@ -529,26 +576,221 @@ namespace OpenSage.Logic.Object
         public float MaxRecoilDistance { get; private set; } = 3.0f;
         public float RecoilSettleSpeed { get; private set; } = 0.065f;
 
-        public AnimationState IdleAnimationState { get; private set; }
         public List<AnimationState> AnimationStates { get; } = new List<AnimationState>();
+
+        private void ParseConditionStateGenerals(IniParser parser, ParseConditionStateType type)
+        {
+            ModelConditionStateGenerals modelConditionState;
+
+            switch (type)
+            {
+                case ParseConditionStateType.Default:
+                    modelConditionState = new ModelConditionStateGenerals();
+                    modelConditionState.ConditionFlags.Add(new BitArray<ModelConditionFlag>());
+                    break;
+
+                case ParseConditionStateType.Normal:
+                    modelConditionState = _conditionStatesGenerals.Count > 0
+                        ? _conditionStatesGenerals[0].Clone() // TODO: This isn't right, it should only clone a Default state.
+                        : new ModelConditionStateGenerals();
+                    modelConditionState.ConditionFlags.Clear();
+                    modelConditionState.ConditionFlags.Add(parser.ParseEnumBitArray<ModelConditionFlag>());
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(type));
+            }
+
+            ModelConditionStateGenerals.Parse(parser, modelConditionState);
+            _conditionStatesGenerals.Add(modelConditionState);
+            parser.Temp = modelConditionState;
+        }
 
         private void ParseAliasConditionState(IniParser parser)
         {
-            if (!(parser.Temp is ModelConditionState lastConditionState))
+            if (parser.Temp is not ModelConditionStateGenerals lastConditionState)
             {
                 throw new IniParseException("Cannot use AliasConditionState if there are no preceding ConditionStates", parser.CurrentPosition);
             }
 
             var conditionFlags = parser.ParseEnumBitArray<ModelConditionFlag>();
 
-            var aliasedConditionState = lastConditionState.Clone(conditionFlags);
-
-            ConditionStates.Add(aliasedConditionState);
+            lastConditionState.ConditionFlags.Add(conditionFlags);
         }
 
-        internal override DrawModule CreateDrawModule(GameObject gameObject, GameContext context)
+        private void ParseConditionState(IniParser parser, ParseConditionStateType type)
         {
-            return new W3dModelDraw(this, gameObject, context);
+            ModelConditionState modelConditionState;
+
+            switch (type)
+            {
+                case ParseConditionStateType.Default:
+                    modelConditionState = new ModelConditionState();
+                    modelConditionState.ConditionFlags.Add(new BitArray<ModelConditionFlag>());
+                    break;
+
+                case ParseConditionStateType.Normal:
+                    modelConditionState = ConditionStates.Count > 0
+                        ? ConditionStates[0].Clone() // TODO: This isn't right, it should only clone a Default state.
+                        : new ModelConditionState();
+                    modelConditionState.ConditionFlags.Clear();
+                    modelConditionState.ConditionFlags.Add(parser.ParseEnumBitArray<ModelConditionFlag>());
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(type));
+            }
+
+            ModelConditionState.Parse(parser, modelConditionState);
+            ConditionStates.Add(modelConditionState);
+            parser.Temp = modelConditionState;
+        }
+
+        /// <summary>
+        /// In Generals, transition states were defined like this:
+        ///
+        /// ```
+        /// ConditionState = FIRING_A
+        ///         Animation         = NICNSC_SKL.NICNSC_ATA
+        ///         AnimationMode = LOOP
+        ///     TransitionKey     = TRANS_Firing
+        /// End
+        ///
+        /// ConditionState = FIRING_A REALLYDAMAGED
+        ///     Animation         = NICNSC_SKL.NICNSC_ATC
+        ///     AnimationMode = LOOP
+        ///     TransitionKey     = TRANS_FiringDamaged
+        /// End
+        ///
+        /// TransitionState = TRANS_Firing TRANS_FiringDamaged
+        ///     Animation       = NICNSC_SKL.NICNSC_AA2AC
+        ///     AnimationMode = ONCE
+        /// End
+        /// ```
+        ///
+        /// but BFME and later games defined transition states like this:
+        ///
+        /// ```
+        /// AnimationState = FIRING_A
+        ///     StateName = FIRING_A
+        ///     Animation = ATA
+        ///         AnimationName = NICNSC_SKL.NICNSC_ATA
+        ///         AnimationMode = LOOP
+        ///     End
+        /// End
+        ///
+        /// AnimationState = FIRING_A REALLYDAMAGED
+        ///     StateName = FIRING_A_REALLYDAMAGED
+        ///     Animation = ATC
+        ///         AnimationName = NICNSC_SKL.NICNSC_ATC
+        ///         AnimationMode = LOOP
+        ///     End
+        ///     BeginScript
+        ///         Prev = CurDrawablePrevAnimationState()
+        ///         if Prev == "FIRING_A" then CurDrawableSetTransitionAnimState("TransitionFiringToFiringDamaged") end
+        ///     EndScript
+        /// End
+        ///
+        /// TransitionState = TRANS_Firing_TRANS_FiringDamaged
+        ///     Animation = AA2AC
+        ///         AnimationName = NICNSC_SKL.NICNSC_AA2AC
+        ///         AnimationMode = ONCE
+        ///     End
+        /// End
+        /// ```
+        ///
+        /// We only want to deal with one way of doing it, so here we translate Generals style
+        /// into BFME style.
+        /// </summary>
+        private void ParseTransitionState(IniParser parser)
+        {
+            if (parser.SageGame == SageGame.CncGenerals || parser.SageGame == SageGame.CncGeneralsZeroHour)
+            {
+                var transitionState = new TransitionStateGenerals
+                {
+                    From = parser.ParseIdentifier(),
+                    To = parser.ParseIdentifier(),
+                };
+
+                ModelConditionStateGenerals.Parse(parser, transitionState);
+
+                _transitionStatesGenerals.Add(transitionState);
+            }
+            else
+            {
+                TransitionStates.Add(AnimationState.Parse(parser, ParseConditionStateType.Transition));
+            }
+        }
+
+        public void OnParsed()
+        {
+            foreach (var conditionState in _conditionStatesGenerals)
+            {
+                // TODO: If this ConditionState only has animation properties set,
+                // skip creating a ModelConditionState for it.
+
+                if (conditionState.NonAnimationPropertySet)
+                {
+                    var modelConditionState = new ModelConditionState();
+                    conditionState.CopyTo(modelConditionState);
+                    ConditionStates.Add(modelConditionState);
+                }
+
+                if (conditionState.AnimationPropertySet)
+                {
+                    var animationState = new AnimationState
+                    {
+                        StateName = conditionState.TransitionKey,
+                        Script = $"Prev = CurDrawablePrevAnimationState{Environment.NewLine}",
+                    };
+
+                    conditionState.CopyTo(animationState);
+
+                    if (conditionState.WaitForStateToFinishIfPossible != null)
+                    {
+                        animationState.Script += $"if Prev == \"{conditionState.WaitForStateToFinishIfPossible}\" then CurDrawableAllowToContinue() end{Environment.NewLine}";
+                    }
+
+                    foreach (var subObject in conditionState.HideSubObject)
+                    {
+                        animationState.Script += $"CurDrawableHideSubObject(\"{subObject}\"){Environment.NewLine}";
+                    }
+
+                    foreach (var subObject in conditionState.ShowSubObject)
+                    {
+                        animationState.Script += $"CurDrawableShowSubObject(\"{subObject}\"){Environment.NewLine}";
+                    }
+
+                    AnimationStates.Add(animationState);
+                }
+            }
+
+            foreach (var transitionStateOld in _transitionStatesGenerals)
+            {
+                var transitionName = $"{transitionStateOld.From}_{transitionStateOld.To}";
+
+                var transitionStateNew = new AnimationState
+                {
+                    StateName = transitionName,
+                };
+
+                transitionStateOld.CopyTo(transitionStateNew);
+
+                TransitionStates.Add(transitionStateNew);
+
+                foreach (var toAnimationState in AnimationStates.Where(x => x.StateName == transitionStateOld.To))
+                {
+                    toAnimationState.Script += $"if Prev == \"{transitionStateOld.From}\" then CurDrawableSetTransitionAnimState(\"{transitionName}\") end{Environment.NewLine}";
+                }
+            }
+
+            _conditionStatesGenerals.Clear();
+            _transitionStatesGenerals.Clear();
+        }
+
+        internal override DrawModule CreateDrawModule(Drawable drawable, GameContext context)
+        {
+            return new W3dModelDraw(this, drawable, context);
         }
     }
 

@@ -1,11 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using OpenSage.Data.Map;
-using OpenSage.Data.Scb;
-using OpenSage.FileFormats;
-using OpenSage.Gui.Apt.ActionScript.Opcodes;
+using System.Text;
 using OpenSage.Logic;
 
 namespace OpenSage.Scripting
@@ -13,8 +8,10 @@ namespace OpenSage.Scripting
     public delegate bool ScriptingCondition(ScriptExecutionContext context, ScriptCondition condition);
     public delegate void ScriptingAction(ScriptExecutionContext context, ScriptAction action);
 
-    public sealed class ScriptingSystem : GameSystem
+    public sealed class ScriptingSystem : GameSystem, IPersistableObject
     {
+        private readonly List<SequentialScript> _sequentialScripts = new();
+
         public static NLog.Logger Logger => NLog.LogManager.GetCurrentClassLogger();
 
         // How many updates are performed per second?
@@ -22,54 +19,86 @@ namespace OpenSage.Scripting
 
         private readonly ScriptExecutionContext _executionContext;
 
-        private ScriptList[] _playerScripts;
+        internal readonly CameraFadeOverlay CameraFadeOverlay;
 
-        internal CameraFadeOverlay CameraFadeOverlay;
+        private readonly ScriptingFlag[] _flags = new ScriptingFlag[128];
+        private ushort _numFlags;
 
-        public Dictionary<string, bool> Flags { get; }
-        public CounterCollection Counters { get; }
-        public TimerCollection Timers { get; }
+        private readonly ScriptingCounter[] _counters = new ScriptingCounter[128];
+        private ushort _numCounters;
+
+        private readonly List<AttackPriority> _attackPriorities = new();
+        private readonly List<ObjectNameAndId> _unknownSomethings = new();
+        private readonly List<ObjectNameAndId>[] _specialPowers;
+        private readonly List<ObjectNameAndId>[] _unknownSuperweaponArray;
+        private readonly List<ObjectNameAndId>[] _upgrades;
+        private readonly ScienceSet[] _sciences;
+        private readonly float[] _unknownFloats = new float[6];
+        private uint _unknown17;
+        private bool _timeFrozen;
+        private readonly List<MapReveal> _mapReveals = new();
+        private readonly List<ObjectTypeList> _objectTypeLists = new();
+        private string _musicTrackName;
 
         public bool Active { get; set; }
 
-        public event EventHandler<ScriptingSystem> OnUpdateFinished; 
+        public event EventHandler<ScriptingSystem> OnUpdateFinished;
 
         public ScriptingSystem(Game game)
             : base(game)
         {
-            Flags = new Dictionary<string, bool>();
-            Counters = new CounterCollection();
-            Timers = new TimerCollection(Counters);
-
             CameraFadeOverlay = AddDisposable(new CameraFadeOverlay(game));
 
             _executionContext = new ScriptExecutionContext(game);
 
             TickRate = game.Definition.ScriptingTicksPerSecond;
+
+            _specialPowers = new List<ObjectNameAndId>[Player.MaxPlayers];
+            for (var i = 0; i < _specialPowers.Length; i++)
+            {
+                _specialPowers[i] = new List<ObjectNameAndId>();
+            }
+
+            _unknownSuperweaponArray = new List<ObjectNameAndId>[Player.MaxPlayers];
+            for (var i = 0; i < _unknownSuperweaponArray.Length; i++)
+            {
+                _unknownSuperweaponArray[i] = [];
+            }
+
+            _upgrades = new List<ObjectNameAndId>[Player.MaxPlayers];
+            for (var i = 0; i < _upgrades.Length; i++)
+            {
+                _upgrades[i] = new List<ObjectNameAndId>();
+            }
+
+            _sciences = new ScienceSet[Player.MaxPlayers];
+            for (var i = 0; i < _sciences.Length; i++)
+            {
+                _sciences[i] = new ScienceSet();
+            }
         }
 
         internal override void OnSceneChanging()
         {
-            Flags.Clear();
-            Counters.Clear();
-            Timers.Clear();
+            _numFlags = 1;
+            _numCounters = 1;
         }
 
         internal override void OnSceneChanged()
         {
-            _playerScripts = Game.Scene3D?.PlayerScripts;
+
         }
 
         public Script FindScript(string name)
         {
-            if (_playerScripts == null)
+            if (Game.Scene3D?.PlayerScripts?.ScriptLists == null)
             {
                 return null;
             }
 
-            for (var i = 0; i < _playerScripts.Length; i++)
+            for (var i = 0; i < Game.Scene3D.PlayerScripts.ScriptLists.Length; i++)
             {
-                var script = _playerScripts[i].FindScript(name);
+                var script = Game.Scene3D.PlayerScripts.ScriptLists[i].FindScript(name);
                 if (script != null)
                 {
                    return script;
@@ -79,9 +108,122 @@ namespace OpenSage.Scripting
             return null;
         }
 
+        public bool GetFlagValue(string name)
+        {
+            ref var flag = ref GetFlag(name);
+
+            return flag.Value;
+        }
+
+        public void SetFlagValue(string name, bool value)
+        {
+            ref var flag = ref GetFlag(name);
+
+            flag.Value = value;
+        }
+
+        private ref ScriptingFlag GetFlag(string name)
+        {
+            for (var i = 0; i < _flags.Length; i++)
+            {
+                if (_flags[i].Name == name)
+                {
+                    return ref _flags[i];
+                }
+            }
+
+            if (_numFlags == _flags.Length)
+            {
+                throw new InvalidOperationException();
+            }
+
+            ref var result = ref _flags[_numFlags];
+
+            result.Name = name;
+            result.Value = false;
+
+            _numFlags++;
+
+            return ref result;
+        }
+
+        public int GetCounterValue(string name)
+        {
+            ref var counter = ref GetCounter(name);
+
+            return counter.Value;
+        }
+
+        public bool HasTimerExpired(string name)
+        {
+            ref var counter = ref GetCounter(name);
+
+            if (!counter.IsTimer)
+            {
+                return false;
+            }
+
+            return counter.Value == -1;
+        }
+
+        public void SetCounterValue(string name, int value)
+        {
+            ref var counter = ref GetCounter(name);
+
+            counter.Value = value;
+        }
+
+        public void AddCounterValue(string name, int valueToAdd)
+        {
+            ref var counter = ref GetCounter(name);
+
+            counter.Value += valueToAdd;
+        }
+
+        public void SubtractCounterValue(string name, int valueToSubtract)
+        {
+            ref var counter = ref GetCounter(name);
+
+            counter.Value -= valueToSubtract;
+        }
+
+        public void SetTimerValue(string name, int value)
+        {
+            ref var counter = ref GetCounter(name);
+
+            counter.IsTimer = true;
+            counter.Value = value;
+        }
+
+        private ref ScriptingCounter GetCounter(string name)
+        {
+            for (var i = 0; i < _counters.Length; i++)
+            {
+                if (_counters[i].Name == name)
+                {
+                    return ref _counters[i];
+                }
+            }
+
+            if (_numCounters == _counters.Length)
+            {
+                throw new InvalidOperationException();
+            }
+
+            ref var result = ref _counters[_numCounters];
+
+            result.Name = name;
+            result.Value = 0;
+            result.IsTimer = false;
+
+            _numCounters++;
+
+            return ref result;
+        }
+
         public void ScriptingTick()
         {
-            if (_playerScripts == null)
+            if (Game.Scene3D?.PlayerScripts?.ScriptLists == null)
             {
                 return;
             }
@@ -91,14 +233,22 @@ namespace OpenSage.Scripting
                 return;
             }
 
-            foreach (var playerScripts in _playerScripts)
+            foreach (var playerScripts in Game.Scene3D.PlayerScripts.ScriptLists)
             {
-                playerScripts.Execute(_executionContext);
+                playerScripts?.Execute(_executionContext);
             }
 
             OnUpdateFinished?.Invoke(this, this);
 
-            Timers.Update();
+            for (var i = 0; i < _numCounters; i++)
+            {
+                ref var counter = ref _counters[i];
+
+                if (counter.IsTimer && counter.Value > -1)
+                {
+                    counter.Value -= 1;
+                }
+            }
 
             UpdateCameraFadeOverlay();
         }
@@ -126,290 +276,244 @@ namespace OpenSage.Scripting
             CameraFadeOverlay.Update();
         }
 
-        internal void Load(BinaryReader reader)
+        public void Persist(StatePersister reader)
         {
-            var numSequentialScripts = reader.ReadUInt16();
-            for (var i = 0; i < numSequentialScripts; i++)
-            {
-                var sequentialScript = new SequentialScript();
-                sequentialScript.Load(reader);
-            }
+            reader.PersistVersion(5);
 
-            var numTimersAndCounters = reader.ReadUInt32();
-
-            var unknown2 = reader.ReadUInt32();
-            if (unknown2 != 0)
-            {
-                throw new InvalidDataException();
-            }
-
-            for (var i = 1; i < numTimersAndCounters; i++)
-            {
-                var value = reader.ReadInt32();
-                var name = reader.ReadBytePrefixedAsciiString();
-                var active = reader.ReadBooleanChecked();
-            }
-
-            var numTimersAndCounters2 = reader.ReadUInt32();
-            if (numTimersAndCounters2 != numTimersAndCounters)
-            {
-                throw new InvalidDataException();
-            }
-
-            var numFlags = reader.ReadUInt32();
-
-            for (var i = 1; i < numFlags; i++)
-            {
-                var value = reader.ReadBooleanChecked();
-                var name = reader.ReadBytePrefixedAsciiString();
-            }
-
-            var numFlags2 = reader.ReadUInt32();
-            if (numFlags2 != numFlags)
-            {
-                throw new InvalidDataException();
-            }
-
-            var numAttackPrioritySets = reader.ReadUInt16();
-
-            var unknown3 = reader.ReadBytes(8); // TODO
-
-            for (var i = 1; i < numAttackPrioritySets; i++)
-            {
-                var attackPriority = new AttackPriority();
-                attackPriority.Load(reader);
-            }
-
-            var numAttackPrioritySets2 = reader.ReadUInt32();
-            if (numAttackPrioritySets2 != numAttackPrioritySets)
-            {
-                throw new InvalidDataException();
-            }
-
-            var unknown7 = reader.ReadInt32();
-            if (unknown7 != -1)
-            {
-                throw new InvalidDataException();
-            }
-
-            var unknown8 = reader.ReadInt32();
-            if (unknown8 != -1)
-            {
-                throw new InvalidDataException();
-            }
-
-            var unknownCount = reader.ReadUInt16();
-            for (var i = 0; i < unknownCount; i++)
-            {
-                var objectName = reader.ReadBytePrefixedAsciiString();
-                var someId = reader.ReadUInt32();
-            }
-
-            var unknown9 = reader.ReadByte();
-            if (unknown9 != 0)
-            {
-                throw new InvalidDataException();
-            }
-
-            CameraFadeOverlay.Load(reader);
-
-            var unknown14 = reader.ReadBytes(12);
-
-            var numSpecialPowerSets = reader.ReadUInt16(); // Maybe not sides, maybe player count?
-            for (var i = 0; i < numSpecialPowerSets; i++)
-            {
-                var version = reader.ReadByte();
-
-                var numSpecialPowers = reader.ReadUInt16();
-                for (var j = 0; j < numSpecialPowers; j++)
+            reader.PersistList(
+                _sequentialScripts,
+                static (StatePersister persister, ref SequentialScript item) =>
                 {
-                    var name = reader.ReadBytePrefixedAsciiString();
-                    var timestamp = reader.ReadUInt32();
-                }
+                    item ??= new SequentialScript();
+                    persister.PersistObjectValue(item);
+                });
+
+            reader.PersistUInt16(ref _numCounters);
+
+            reader.BeginArray("Counters");
+            for (var i = 0; i < _numCounters; i++)
+            {
+                ref var counter = ref _counters[i];
+
+                reader.BeginObject();
+
+                reader.PersistInt32(ref counter.Value, "Value");
+                reader.PersistAsciiString(ref counter.Name, "Name");
+                reader.PersistBoolean(ref counter.IsTimer, "IsTimer");
+
+                reader.EndObject();
+            }
+            reader.EndArray();
+
+            var numTimersAndCounters2 = (uint)_numCounters;
+            reader.PersistUInt32(ref numTimersAndCounters2);
+            if (numTimersAndCounters2 != _numCounters)
+            {
+                throw new InvalidStateException();
             }
 
-            var numUnknown1Sets = reader.ReadUInt16();
+            reader.PersistUInt16(ref _numFlags);
+
+            reader.BeginArray("Flags");
+            for (var i = 0; i < _numFlags; i++)
+            {
+                ref var flag = ref _flags[i];
+
+                reader.BeginObject();
+
+                reader.PersistBoolean(ref flag.Value);
+                reader.PersistAsciiString(ref flag.Name);
+
+                reader.EndObject();
+            }
+            reader.EndArray();
+
+            var numFlags2 = (uint)_numFlags;
+            reader.PersistUInt32(ref numFlags2);
+            if (numFlags2 != _numFlags)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistList(
+                _attackPriorities,
+                static (StatePersister persister, ref AttackPriority item) =>
+                {
+                    item ??= new AttackPriority();
+                    persister.PersistObjectValue(item);
+                });
+
+            var numAttackPrioritySets2 = (uint)_attackPriorities.Count;
+            reader.PersistUInt32(ref numAttackPrioritySets2);
+            if (numAttackPrioritySets2 != _attackPriorities.Count)
+            {
+                throw new InvalidStateException();
+            }
+
+            var unknown1 = -1;
+            reader.PersistInt32(ref unknown1);
+            if (unknown1 != -1)
+            {
+                throw new InvalidStateException();
+            }
+
+            var unknown2 = -1;
+            reader.PersistInt32(ref unknown2);
+            if (unknown2 != -1)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistList(
+                _unknownSomethings,
+                static (StatePersister persister, ref ObjectNameAndId item) =>
+                {
+                    persister.PersistObjectValue(ref item);
+                });
+
+            reader.SkipUnknownBytes(1);
+
+            reader.PersistObject(CameraFadeOverlay);
+
+            reader.BeginArray("UnknownArray");
+            for (var i = 0; i < 4; i++)
+            {
+                reader.BeginObject();
+
+                reader.PersistVersion(1);
+
+                reader.SkipUnknownBytes(2);
+
+                reader.EndObject();
+            }
+            reader.EndArray();
+
+            reader.PersistArrayWithUInt16Length(_specialPowers, ObjectNameAndIdListPersister);
+
+            ushort numUnknown1Sets = 0;
+            reader.PersistUInt16(ref numUnknown1Sets);
+
             for (var i = 0; i < numUnknown1Sets; i++)
             {
-                var version = reader.ReadByte();
+                reader.PersistVersion(1);
 
-                var count = reader.ReadUInt16();
-                if (count != 0)
-                {
-                    throw new InvalidDataException();
-                }
+                reader.SkipUnknownBytes(2);
             }
 
-            var numUnknown2Sets = reader.ReadUInt16();
-            for (var i = 0; i < numUnknown2Sets; i++)
-            {
-                var version = reader.ReadByte();
+            reader.PersistArrayWithUInt16Length(_unknownSuperweaponArray, ObjectNameAndIdListPersister);
 
-                var count = reader.ReadUInt16();
-                if (count != 0)
+            reader.PersistArrayWithUInt16Length(_upgrades, ObjectNameAndIdListPersister);
+
+            reader.PersistArrayWithUInt16Length(
+                _sciences,
+                static (StatePersister persister, ref ScienceSet item) =>
                 {
-                    throw new InvalidDataException();
-                }
-            }
+                    persister.PersistObjectValue(item);
+                });
 
-            var numUpgradeSets = reader.ReadUInt16();
-            for (var i = 0; i < numUpgradeSets; i++)
-            {
-                var version = reader.ReadByte();
-
-                var numUpgrades = reader.ReadUInt16();
-                for (var j = 0; j < numUpgrades; j++)
-                {
-                    var name = reader.ReadBytePrefixedAsciiString();
-                    var timestamp = reader.ReadUInt32();
-                }
-            }
-
-            var numScienceSets = reader.ReadUInt16();
-            for (var i = 0; i < numScienceSets; i++)
-            {
-                var version = reader.ReadByte();
-
-                var numSciences = reader.ReadUInt16();
-                for (var j = 0; j < numSciences; j++)
-                {
-                    var name = reader.ReadBytePrefixedAsciiString();
-                }
-            }
-
-            var unknown14_1 = reader.ReadByte();
+            byte unknown14_1 = 1;
+            reader.PersistByte(ref unknown14_1);
             if (unknown14_1 != 1)
             {
-                throw new InvalidDataException();
+                throw new InvalidStateException();
             }
 
-            var unknown14_2 = reader.ReadUInt16();
-            if (unknown14_2 != 0)
-            {
-                throw new InvalidDataException();
-            }
+            reader.SkipUnknownBytes(2);
 
-            for (var i = 0; i < 6; i++)
-            {
-                var unknown15 = reader.ReadSingle();
-            }
+            reader.PersistArray(
+                _unknownFloats,
+                static (StatePersister persister, ref float item) =>
+                {
+                    persister.PersistSingleValue(ref item);
+                });
 
-            var unknown16 = reader.ReadUInt32();
+            var unknown16 = 150u;
+            reader.PersistUInt32(ref unknown16);
             if (unknown16 != 150)
             {
-                throw new InvalidDataException();
+                throw new InvalidStateException();
             }
 
-            var unknown17 = reader.ReadUInt32();
-            if (unknown17 != 0 && unknown17 != 1 && unknown17 != 2)
+            reader.PersistUInt32(ref _unknown17);
+            if (_unknown17 != 0 && _unknown17 != 1 && _unknown17 != 2)
             {
-                throw new InvalidDataException();
+                throw new InvalidStateException();
             }
 
-            var unknown18 = reader.ReadByte();
-            if (unknown18 != 0)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistBoolean(ref _timeFrozen);
 
-            var numMapReveals = reader.ReadUInt16();
-            for (var i = 0; i < numMapReveals; i++)
-            {
-                var revealName = reader.ReadBytePrefixedAsciiString();
-                var waypoint = reader.ReadBytePrefixedAsciiString();
-                var radius = reader.ReadSingle();
-                var player = reader.ReadBytePrefixedAsciiString();
-            }
+            reader.PersistList(
+                _mapReveals,
+                static (StatePersister persister, ref MapReveal item) =>
+                {
+                    persister.BeginObject();
 
-            var numObjectTypeLists = reader.ReadUInt16();
-            for (var i = 0; i < numObjectTypeLists; i++)
-            {
-                var objectTypeList = new ObjectTypeList();
-                objectTypeList.Load(reader);
-            }
+                    persister.PersistAsciiString(ref item.Name);
+                    persister.PersistAsciiString(ref item.Waypoint);
+                    persister.PersistSingle(ref item.Radius);
+                    persister.PersistAsciiString(ref item.Player);
 
-            var unknown20 = reader.ReadByte();
+                    persister.EndObject();
+                });
+
+            reader.PersistList(
+                _objectTypeLists,
+                static (StatePersister persister, ref ObjectTypeList item) =>
+                {
+                    item ??= new ObjectTypeList();
+                    persister.PersistObjectValue(item);
+                });
+
+            byte unknown20 = 1;
+            reader.PersistByte(ref unknown20);
             if (unknown20 != 1)
             {
-                throw new InvalidDataException();
+                throw new InvalidStateException();
             }
 
-            var musicTrack = reader.ReadBytePrefixedAsciiString();
+            reader.PersistAsciiString(ref _musicTrackName);
 
-            var unknown21 = reader.ReadByte();
-            if (unknown21 != 0)
-            {
-                throw new InvalidDataException();
-            }
+            reader.SkipUnknownBytes(1);
         }
 
-        /// <summary>
-        /// Initializes the skirmish game.
-        /// </summary>
-        public void InitializeSkirmishGame()
+        private static void ObjectNameAndIdListPersister(StatePersister persister, ref List<ObjectNameAndId> item) => persister.PersistObjectNameAndIdList(item);
+
+        internal void Dump(StringBuilder sb)
         {
-            var playerNames = Game.Scene3D.MapFile.SidesList.Players.Select(p => p.Properties.GetPropOrNull("playerName")?.Value.ToString()).ToArray();
+            sb.AppendLine("Counters:");
 
-            _playerScripts = new ScriptList[Game.Scene3D.Players.Count + 1]; // + 1 for neutral player @ index 0
-            CopyScripts(Game.Scene3D.PlayerScripts, playerNames, string.Empty, 0, appendIndex: false); // neutral
-            CopyScripts(Game.Scene3D.PlayerScripts, playerNames, Game.CivilianPlayer.Name, 1, appendIndex: false); // Civilian
-
-            var skirmishScriptsEntry = Game.ContentManager.GetScriptEntry(@"Data\Scripts\SkirmishScripts.scb");
-            if (skirmishScriptsEntry != null)
+            foreach (var kv in _counters)
             {
-                using (var stream = skirmishScriptsEntry.Open())
-                {
-                    var skirmishScripts = ScbFile.FromStream(stream);
+                sb.AppendFormat("  {0}: {1} (IsTimer: {2})\n", kv.Name, kv.Value, kv.IsTimer);
+            }
 
-                    // skip civilian player
-                    for (int i = 1; i < Game.Scene3D.Players.Count; i++)
-                    {
-                        var player = Game.Scene3D.Players[i];
+            sb.AppendLine("Flags:");
 
-                        if (player.IsHuman)
-                        {
-                            // copy the scripts from the civilian player to all human players
-                            CopyScripts(skirmishScripts.PlayerScripts.ScriptLists, skirmishScripts.Players.PlayerNames, Game.CivilianPlayer.Name, i + 1, appendIndex: true);
-                        }
-                        else
-                        {
-                            // copy the scripts from the according skirmish player for all AI players
-                            CopyScripts(skirmishScripts.PlayerScripts.ScriptLists, skirmishScripts.Players.PlayerNames, "Skirmish" + player.Side, i + 1, appendIndex: true);
-                        }
-                    }
-                }
+            foreach (var kv in _flags)
+            {
+                sb.AppendFormat("  {0}: {1}\n", kv.Name, kv.Value);
             }
         }
+    }
 
-        /// <summary>
-        /// Copies source scripts to a target player, optionally renaming variables, script and team names based on the target player index.
-        /// </summary>
-        /// <param name="scriptsList">The scripts list.</param>
-        /// <param name="playerNames">The source player names.</param>
-        /// <param name="sourcePlayerName">The name of the source player to copy. This is used to find the index in the <paramref name="playerNames"/> array, which is then used to access the <paramref name="scriptsList"/> array.</param>
-        /// <param name="targetPlayerIndex">The index in the <see cref="_playerScripts"/> array the scripts should be copied to.
-        /// 0 .. Neutral
-        /// 1 .. Civilian
-        /// 2 .. player 1
-        /// 3 .. player 2
-        /// ...
-        /// </param>.
-        /// <param name="appendIndex">If set to <c>true</c>, the player index will be appended to all script, team and variable names in order to create unique names.</param>
-        private void CopyScripts(ScriptList[] scriptsList, string[] playerNames, string sourcePlayerName, int targetPlayerIndex, bool appendIndex)
-        {
-            var sourcePlayerIndex = Array.FindIndex(playerNames, p => p.Equals(sourcePlayerName, StringComparison.OrdinalIgnoreCase));
-            if (sourcePlayerIndex >= 0)
-            {
-                // In script files, the neutral player at index 0 is not included in the player names list
-                if (scriptsList.Length > playerNames.Length)
-                {
-                    sourcePlayerIndex++;
-                }
+    internal struct ScriptingFlag
+    {
+        public bool Value;
+        public string Name;
+    }
 
-                // For player 1, we want to append "0" to all script names and variables, but his position in the array is 2.
-                var appendix = appendIndex ? (targetPlayerIndex - 2).ToString() : null;
-                _playerScripts[targetPlayerIndex] = scriptsList[sourcePlayerIndex].Copy(appendix);
-            }
-        }
+    internal struct ScriptingCounter
+    {
+        public int Value;
+        public string Name;
+        public bool IsTimer;
+    }
+
+    internal struct MapReveal
+    {
+        public string Name;
+        public string Waypoint;
+        public float Radius;
+        public string Player;
     }
 }

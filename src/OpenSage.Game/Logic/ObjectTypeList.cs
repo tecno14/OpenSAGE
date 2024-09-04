@@ -1,31 +1,30 @@
 ﻿using System.Collections.Generic;
-using System.IO;
-using OpenSage.FileFormats;
 
 namespace OpenSage.Logic
 {
-    internal sealed class ObjectTypeList
+    internal sealed class ObjectTypeList : IPersistableObject
     {
         private readonly HashSet<string> _objectTypes;
 
-        public string Name { get; private set; }
+        public string Name;
 
         public ObjectTypeList()
         {
             _objectTypes = new HashSet<string>();
         }
 
-        internal void Load(BinaryReader reader)
+        public void Persist(StatePersister reader)
         {
-            var version = reader.ReadVersion();
+            reader.PersistVersion(1);
 
-            Name = reader.ReadBytePrefixedAsciiString();
+            reader.PersistAsciiString(ref Name);
 
-            var numObjects = reader.ReadUInt16();
-            for (var j = 0; j < numObjects; j++)
-            {
-                _objectTypes.Add(reader.ReadBytePrefixedAsciiString());
-            }
+            reader.PersistHashSet(
+                _objectTypes,
+                static (StatePersister persister, ref string item) =>
+                {
+                    persister.PersistAsciiStringValue(ref item);
+                });
         }
     }
 }

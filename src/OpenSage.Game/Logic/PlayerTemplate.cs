@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Text.RegularExpressions;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
+using OpenSage.Gui.ControlBar;
 using OpenSage.Logic.Object;
 using OpenSage.Mathematics;
 
@@ -62,11 +63,11 @@ namespace OpenSage.Logic
             { "IsObserver", (parser, x) => x.IsObserver = parser.ParseBoolean() },
             { "StartMoney", (parser, x) => x.StartMoney = parser.ParseInteger() },
             { "PreferredColor", (parser, x) => x.PreferredColor = parser.ParseColorRgb() },
-            { "IntrinsicSciences", (parser, x) => x.IntrinsicSciences = parser.ParseAssetReferenceArray() },
-            { "PurchaseScienceCommandSetRank1", (parser, x) => x.PurchaseScienceCommandSetRank1 = parser.ParseAssetReference() },
-            { "PurchaseScienceCommandSetRank3", (parser, x) => x.PurchaseScienceCommandSetRank3 = parser.ParseAssetReference() },
-            { "PurchaseScienceCommandSetRank8", (parser, x) => x.PurchaseScienceCommandSetRank8 = parser.ParseAssetReference() },
-            { "SpecialPowerShortcutCommandSet", (parser, x) => x.SpecialPowerShortcutCommandSet = parser.ParseAssetReference() },
+            { "IntrinsicSciences", (parser, x) => x.IntrinsicSciences = parser.ParseScienceReferenceArray() },
+            { "PurchaseScienceCommandSetRank1", (parser, x) => x.PurchaseScienceCommandSetRank1 = parser.ParseCommandSetReference() },
+            { "PurchaseScienceCommandSetRank3", (parser, x) => x.PurchaseScienceCommandSetRank3 = parser.ParseCommandSetReference() },
+            { "PurchaseScienceCommandSetRank8", (parser, x) => x.PurchaseScienceCommandSetRank8 = parser.ParseCommandSetReference() },
+            { "SpecialPowerShortcutCommandSet", (parser, x) => x.SpecialPowerShortcutCommandSet = parser.ParseCommandSetReference() },
             { "SpecialPowerShortcutWinName", (parser, x) => x.SpecialPowerShortcutWinName = parser.ParseFileName() },
             { "SpecialPowerShortcutButtonCount", (parser, x) => x.SpecialPowerShortcutButtonCount = parser.ParseInteger() },
             { "DisplayName", (parser, x) => x.DisplayName = parser.ParseLocalizedStringKey() },
@@ -92,7 +93,7 @@ namespace OpenSage.Logic
             { "MaxLevelSP", (parser, x) => x.MaxLevelSP = parser.ParseInteger() },
             { "MaxLevelMP", (parser, x) => x.MaxLevelMP = parser.ParseInteger() },
             { "StartingUnitTacticalWOTR", (parser, x) => x.StartingUnitTacticalWOTR = parser.ParseAssetReference() },
-            { "IntrinsicSciencesMP", (parser, x) => x.IntrinsicSciencesMP = parser.ParseAssetReferenceArray() },
+            { "IntrinsicSciencesMP", (parser, x) => x.IntrinsicSciencesMP = parser.ParseScienceReferenceArray() },
             { "SpellBook", (parser, x) => x.SpellBook = parser.ParseAssetReference() },
             { "SpellBookMp", (parser, x) => x.SpellBookMp = parser.ParseAssetReference() },
             { "PurchaseScienceCommandSet", (parser, x) => x.PurchaseScienceCommandSet = parser.ParseAssetReference() },
@@ -101,7 +102,7 @@ namespace OpenSage.Logic
             { "LightPointsUpSound", (parser, x) => x.LightPointsUpSound = parser.ParseAssetReference() },
             { "ObjectiveAddedSound", (parser, x) => x.ObjectiveAddedSound = parser.ParseAssetReference() },
             { "ObjectiveCompletedSound", (parser, x) => x.ObjectiveCompletedSound = parser.ParseAssetReference() },
-            { "InitialUpgrades", (parser, x) => x.InitialUpgrades = parser.ParseAssetReferenceArray() },
+            { "InitialUpgrades", (parser, x) => x.InitialUpgrades = parser.ParseUpgradeReferenceArray() },
             { "BuildableHeroesMP", (parser, x) => x.BuildableHeroesMP = parser.ParseObjectReferenceArray() },
             { "BuildableRingHeroesMP", (parser, x) => x.BuildableRingHeroesMP = parser.ParseAssetReferenceArray() },
             { "SpellStoreCurrentPowerLabel", (parser, x) => x.SpellStoreCurrentPowerLabel = parser.ParseAssetReference() },
@@ -120,11 +121,11 @@ namespace OpenSage.Logic
         public bool IsObserver { get; private set; }
         public int StartMoney { get; private set; }
         public ColorRgb PreferredColor { get; private set; }
-        public string[] IntrinsicSciences { get; private set; }
-        public string PurchaseScienceCommandSetRank1 { get; private set; }
-        public string PurchaseScienceCommandSetRank3 { get; private set; }
-        public string PurchaseScienceCommandSetRank8 { get; private set; }
-        public string SpecialPowerShortcutCommandSet { get; private set; }
+        public LazyAssetReference<Science>[] IntrinsicSciences { get; private set; }
+        public LazyAssetReference<CommandSet> PurchaseScienceCommandSetRank1 { get; private set; }
+        public LazyAssetReference<CommandSet> PurchaseScienceCommandSetRank3 { get; private set; }
+        public LazyAssetReference<CommandSet> PurchaseScienceCommandSetRank8 { get; private set; }
+        public LazyAssetReference<CommandSet> SpecialPowerShortcutCommandSet { get; private set; }
         public string SpecialPowerShortcutWinName { get; private set; }
         public int SpecialPowerShortcutButtonCount { get; private set; }
         public string DisplayName { get; private set; }
@@ -172,7 +173,7 @@ namespace OpenSage.Logic
         public int MaxLevelMP { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public string[] IntrinsicSciencesMP { get; private set; }
+        public LazyAssetReference<Science>[] IntrinsicSciencesMP { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
         public string StartingUnitTacticalWOTR { get; private set; }
@@ -202,7 +203,7 @@ namespace OpenSage.Logic
         public string ObjectiveCompletedSound { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public string[] InitialUpgrades { get; private set; }
+        public LazyAssetReference<UpgradeTemplate>[] InitialUpgrades { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
         public LazyAssetReference<ObjectDefinition>[] BuildableHeroesMP { get; private set; }

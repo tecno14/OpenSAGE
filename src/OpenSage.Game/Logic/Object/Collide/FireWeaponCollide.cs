@@ -5,7 +5,35 @@ namespace OpenSage.Logic.Object
 {
     public sealed class FireWeaponCollide : CollideModule
     {
-        // TODO
+        private readonly FireWeaponCollideModuleData _moduleData;
+
+        private bool _unknown1;
+        private readonly Weapon _collideWeapon;
+        private bool _unknown2;
+
+        internal FireWeaponCollide(GameObject gameObject, FireWeaponCollideModuleData moduleData)
+        {
+            _moduleData = moduleData;
+
+            _collideWeapon = new Weapon(
+                gameObject,
+                moduleData.CollideWeapon.Value,
+                WeaponSlot.Primary,
+                gameObject.GameContext);
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistBoolean(ref _unknown1);
+            reader.PersistObject(_collideWeapon);
+            reader.PersistBoolean(ref _unknown2);
+        }
     }
 
     public sealed class FireWeaponCollideModuleData : CollideModuleData
@@ -23,7 +51,7 @@ namespace OpenSage.Logic.Object
 
         internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new FireWeaponCollide();
+            return new FireWeaponCollide(gameObject, this);
         }
     }
 }

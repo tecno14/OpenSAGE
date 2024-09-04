@@ -45,6 +45,8 @@ namespace OpenSage.Gui.Apt
             _sprite = (Playable) character;
             _currentFrame = 0;
             _actionList = new List<Action>();
+            Content?.Dispose();
+            RemoveToDispose(Content);
             FrameLabels = new Dictionary<string, uint>();
             State = PlayState.PLAYING;
 
@@ -52,7 +54,7 @@ namespace OpenSage.Gui.Apt
             Visible = true;
             Character = _sprite;
             Context = context;
-            Content = new DisplayList();
+            Content = AddDisposable(new DisplayList());
             Parent = parent;
             ScriptObject = new ObjectContext(this);
 
@@ -155,18 +157,18 @@ namespace OpenSage.Gui.Apt
             State = PlayState.PLAYING;
         }
 
-        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
+        private static NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
         public void Goto(string label)
         {
-            logger.Info($"Goto: {label}");
+            Logger.Info($"Goto: {label}");
             if (FrameLabels.ContainsKey(label))
             {
                 _currentFrame = FrameLabels[label];
             }
             else
             {
-                logger.Warn($"Missing framelabel: {label}");
+                Logger.Warn($"Missing framelabel: {label}");
             }
         }
 
@@ -191,7 +193,7 @@ namespace OpenSage.Gui.Apt
 
         private bool IsNewFrame(TimeInterval gt)
         {
-            if (_lastUpdate.TotalTime.Milliseconds == 0)
+            if (_lastUpdate.TotalTime.TotalMilliseconds == 0)
             {
                 _lastUpdate = gt;
                 return true;
@@ -200,7 +202,7 @@ namespace OpenSage.Gui.Apt
             if (State == PlayState.STOPPED)
                 return false;
 
-            if ((gt.TotalTime - _lastUpdate.TotalTime).Milliseconds >= Context.MillisecondsPerFrame)
+            if ((gt.TotalTime - _lastUpdate.TotalTime).TotalMilliseconds >= Context.MillisecondsPerFrame)
             {
                 _lastUpdate = gt;
                 return true;
@@ -209,7 +211,7 @@ namespace OpenSage.Gui.Apt
                 return false;
         }
 
-        private void HandleFrameItem(FrameItem item)
+        public void HandleFrameItem(FrameItem item)
         {
             switch (item)
             {
@@ -271,17 +273,20 @@ namespace OpenSage.Gui.Apt
                 geoTranslate = Vector2.Zero;
             }
 
-            ColorRgbaF colorTransform;
+            ColorRgbaF tintColor;
+            ColorRgbaF additiveColor;
             if (po.Flags.HasFlag(PlaceObjectFlags.HasColorTransform))
             {
-                colorTransform = po.Color.ToColorRgbaF();
+                tintColor = po.TintColor.ToColorRgbaF();
+                additiveColor = po.AdditiveColor.ToColorRgbaF();
             }
             else
             {
-                colorTransform = ColorRgbaF.White;
+                tintColor = ColorRgbaF.White;
+                additiveColor = ColorRgbaF.Transparent;
             }
 
-            return new ItemTransform(colorTransform, geoRotate, geoTranslate);
+            return new ItemTransform(tintColor, additiveColor, geoRotate, geoTranslate);
         }
 
         private void MoveItem(PlaceObject po)
@@ -305,7 +310,8 @@ namespace OpenSage.Gui.Apt
 
             if (po.Flags.HasFlag(PlaceObjectFlags.HasColorTransform))
             {
-                cTransform.ColorTransform = po.Color.ToColorRgbaF();
+                cTransform.TintColorTransform = po.TintColor.ToColorRgbaF();
+                cTransform.AdditiveColorTransform = po.AdditiveColor.ToColorRgbaF();
             }
 
             if (po.Flags.HasFlag(PlaceObjectFlags.HasName))
@@ -325,15 +331,12 @@ namespace OpenSage.Gui.Apt
 
             var character = Context.GetCharacter(po.Character, _sprite);
             var itemTransform = CreateTransform(po);
-
-            DisplayItem displayItem;
-            if (character is Playable)
-                displayItem = new SpriteItem();
-            else if (character is Button)
-                displayItem = new ButtonItem();
-            else
-                displayItem = new RenderItem();
-
+            DisplayItem displayItem = character switch
+            {
+                Playable _ => new SpriteItem(),
+                Button _ => new ButtonItem(),
+                _ => new RenderItem(),
+            };
             displayItem.Transform = itemTransform;
             displayItem.Create(character, Context, this);
 
@@ -362,8 +365,6 @@ namespace OpenSage.Gui.Apt
             if(po.Flags.HasFlag(PlaceObjectFlags.HasClipDepth))
             {
                 displayItem.ClipDepth = po.ClipDepth;
-
-                // TODO: Need to dispose this.
                 displayItem.ClipMask = new RenderTarget(Context.Window.ContentManager.GraphicsDevice);
             }
 

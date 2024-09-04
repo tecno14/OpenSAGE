@@ -1,8 +1,58 @@
-﻿using OpenSage.Data.Ini;
+﻿using System.Collections.Generic;
+using OpenSage.Data.Ini;
 using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class BoneFXUpdate : UpdateModule
+    {
+        private readonly List<uint> _particleSystemIds = new();
+        private readonly int[] _unknownInts = new int[96];
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistList(
+                _particleSystemIds,
+                static (StatePersister persister, ref uint item) =>
+                {
+                    persister.PersistUInt32Value(ref item);
+                });
+
+            reader.PersistArray(
+                _unknownInts, static (StatePersister persister, ref int item) =>
+                {
+                    persister.PersistInt32Value(ref item);
+
+                    if (persister.Mode == StatePersistMode.Read && item != -1)
+                    {
+                        throw new InvalidStateException();
+                    }
+                });
+
+            reader.SkipUnknownBytes(289 * 4);
+
+            var unknown1 = 1;
+            reader.PersistInt32(ref unknown1);
+            if (unknown1 != 1)
+            {
+                throw new InvalidStateException();
+            }
+
+            var unknown2 = true;
+            reader.PersistBoolean(ref unknown2);
+            if (!unknown2)
+            {
+                throw new InvalidStateException();
+            }
+        }
+    }
+
     public sealed class BoneFXUpdateModuleData : UpdateModuleData
     {
         internal static BoneFXUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
@@ -43,6 +93,11 @@ namespace OpenSage.Logic.Object
         public BoneFXUpdateParticleSystem PristineParticleSystem5 { get; private set; }
 
         public BoneFXUpdateParticleSystem PristineParticleSystem6 { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new BoneFXUpdate();
+        }
     }
 
     public sealed class BoneFXUpdateFXList

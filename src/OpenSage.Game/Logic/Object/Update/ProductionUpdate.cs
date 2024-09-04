@@ -1,11 +1,11 @@
-﻿using System;
+﻿#nullable enable
+
+using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Numerics;
+using ImGuiNET;
 using OpenSage.Data.Ini;
-using OpenSage.Diagnostics.Util;
-using OpenSage.FileFormats;
 using OpenSage.Gui.ControlBar;
 using OpenSage.Logic.Object.Production;
 using OpenSage.Mathematics;
@@ -18,25 +18,26 @@ namespace OpenSage.Logic.Object
 
         private readonly GameObject _gameObject;
         private readonly ProductionUpdateModuleData _moduleData;
-        private readonly List<ProductionJob> _productionQueue = new List<ProductionJob>();
+        private readonly List<ProductionJob> _productionQueue = new();
 
-        private DoorState _currentDoorState;
-        private TimeSpan _currentStepEnd;
-
-        private GameObject _producedUnit;
-        private IProductionExit _productionExit;
+        private IProductionExit? _productionExit;
+        private IProductionExit? ProductionExit => _productionExit ??= _gameObject.FindBehavior<IProductionExit>();
 
         private int _doorIndex;
 
-        public GameObject ParentHorde;
+        private uint _nextJobId;
+        private uint _unknownFrame1;
+        private readonly DoorStatus[] _doorStatuses = new DoorStatus[4];
+
+        // todo: persist or remove
+        public GameObject? ParentHorde;
 
         private enum DoorState
         {
             Closed,
-            WaitingToOpen,
             Opening,
             OpenForHordePayload,
-            Open,
+            WaitingOpen,
             Closing,
         }
 
@@ -48,120 +49,178 @@ namespace OpenSage.Logic.Object
         {
             _gameObject = gameObject;
             _moduleData = moduleData;
-            _currentDoorState = DoorState.Closed;
         }
 
         public void CloseDoor()
         {
-            _currentDoorState = DoorState.Open;
+            // todo: update with bfme save data
+            // _currentDoorState = DoorState.WaitingOpen;
         }
 
         internal override void Update(BehaviorUpdateContext context)
         {
-            var time = context.Time;
+            var (currentDoorState, doorStateEndFrame) = GetDoorStatus();
 
             // If door is opening, halt production until it's finished opening.
-            if (_currentDoorState == DoorState.Opening)
+            if (currentDoorState == DoorState.Opening)
             {
-                if (time.TotalTime >= _currentStepEnd)
+                if (context.LogicFrame >= doorStateEndFrame)
                 {
+                    var newObject = _productionQueue[0];
+                    ProduceAndMoveOut(newObject.ObjectDefinition);
                     _productionQueue.RemoveAt(0);
                     Logger.Info($"Door waiting open for {_moduleData.DoorWaitOpenTime}");
-                    _currentStepEnd = time.TotalTime + _moduleData.DoorWaitOpenTime;
-                    _currentDoorState = DoorState.Open;
-
-                    GetDoorConditionFlags(out var doorOpening, out var doorWaitingOpen, out var _);
-                   
-                    _gameObject.ModelConditionFlags.Set(doorOpening, false);
-                    _gameObject.ModelConditionFlags.Set(doorWaitingOpen, true);
-                    MoveProducedObjectOut();
+                    SetDoorStateEndFrame(DoorState.WaitingOpen, context.LogicFrame + _moduleData.DoorWaitOpenTime);
+                    UpdateDoorModelConditionFlags();
                 }
 
                 return;
             }
 
-            if (_productionQueue.Count > 0)
+            var isProducing = _productionQueue.Count > 0;
+            _gameObject.ModelConditionFlags.Set(ModelConditionFlag.ActivelyConstructing, isProducing);
+
+            if (isProducing)
             {
                 var front = _productionQueue[0];
-                var result = front.Produce((float) time.DeltaTime.TotalMilliseconds);
-                if (result == ProductionJobResult.Finished)
+                front.Update();
+
+                if (ProductionExit is { CanProduce: true })
                 {
-                    if (front.Type == ProductionJobType.Unit)
+                    var result = front.Produce();
+                    if (result is ProductionJobResult.UnitReady or ProductionJobResult.Finished)
                     {
-                        if (_moduleData.NumDoorAnimations > 0
-                            && ExitsThroughDoor(front.ObjectDefinition)
-                            && (_currentDoorState != DoorState.OpenForHordePayload))
+                        switch (front.Type)
                         {
-                            Logger.Info($"Door opening for {_moduleData.DoorOpeningTime}");
-                            _currentStepEnd = time.TotalTime + _moduleData.DoorOpeningTime;
-                            _currentDoorState = DoorState.Opening;
+                            case ProductionJobType.Unit when _moduleData.NumDoorAnimations > 0
+                                                             && ExitsThroughDoor(front.ObjectDefinition)
+                                                             && (currentDoorState != DoorState.OpenForHordePayload):
+                                Logger.Info($"Door opening for {_moduleData.DoorOpeningTime}");
 
-                            SetDoorIndex();
+                                SetDoorIndex();
 
-                            GetDoorConditionFlags(out var doorOpening, out var _, out var _);
-                            _gameObject.ModelConditionFlags.Set(doorOpening, true);
+                                SetDoorStateEndFrame(DoorState.Opening, context.LogicFrame + _moduleData.DoorOpeningTime);
+                                UpdateDoorModelConditionFlags();
+                                _gameObject.ModelConditionFlags.Set(ModelConditionFlag.ConstructionComplete, true);
 
-                            ProduceObject(front);
-                        }
-                        else
-                        {
-                            ProduceObject(front);
-                            MoveProducedObjectOut();
-                            _productionQueue.RemoveAt(0);
+                                return; // don't empty the queue - that's handled further up
+                            case ProductionJobType.Unit:
+                                // don't play audio for subsequent spawns (only for first)
+                                ProduceAndMoveOut(front.ObjectDefinition, front.UnitsProduced <= 1);
+                                break;
+                            case ProductionJobType.Upgrade:
+                            {
+                                front.UpgradeDefinition.GrantUpgrade(_gameObject);
+                                if (front.UpgradeDefinition.ResearchSound != null)
+                                {
+                                    // todo: if null, trigger DialogEvent EvaUSA_UpgradeComplete?
+                                    context.GameContext.AudioSystem.PlayAudioEvent(front.UpgradeDefinition.ResearchSound.Value);
+                                }
+
+                                break;
+                            }
                         }
                     }
-                    else if (front.Type == ProductionJobType.Upgrade)
+
+                    if (result is ProductionJobResult.Finished)
                     {
-                        GrantUpgrade(front);
                         _productionQueue.RemoveAt(0);
                     }
                 }
             }
 
-            switch (_currentDoorState)
+            switch (currentDoorState)
             {
-                case DoorState.Open:
-                    if (time.TotalTime >= _currentStepEnd)
+                case DoorState.WaitingOpen when context.LogicFrame >= doorStateEndFrame:
+                    _gameObject.ModelConditionFlags.Set(ModelConditionFlag.ConstructionComplete, false);
+                    if (ProductionExit is ParkingPlaceBehaviour)
                     {
-                        _productionExit ??= _gameObject.FindBehavior<IProductionExit>();
-                        if (_productionExit is ParkingPlaceBehaviour)
-                        {
-                            break; // Door is closed on aircraft death from JetAIUpdate
-                        }
-                        CloseDoor(time, _doorIndex);
+                        break; // Door is closed on aircraft death from JetAIUpdate
                     }
+                    CloseDoor(_doorIndex);
                     break;
 
-                case DoorState.Closing:
-                    if (time.TotalTime >= _currentStepEnd)
-                    {
-                        Logger.Info($"Door closed");
-                        _currentDoorState = DoorState.Closed;
-                        GetDoorConditionFlags(out var _, out var _, out var doorClosing);
-                        _gameObject.ModelConditionFlags.Set(doorClosing, false);
-                    }
+                case DoorState.Closing when context.LogicFrame >= doorStateEndFrame:
+                    Logger.Info($"Door closed");
+                    SetDoorStateEndFrame(DoorState.Closed, default);
+                    UpdateDoorModelConditionFlags();
                     break;
                 case DoorState.OpenForHordePayload:
                     break; //door is closed again by HordeContain
             }
         }
 
-        public void CloseDoor(TimeInterval time, int doorIndex)
+        public void CloseDoor(int doorIndex)
         {
             _doorIndex = doorIndex;
             Logger.Info($"Door closing for {_moduleData.DoorCloseTime}");
-            _currentStepEnd = time.TotalTime + _moduleData.DoorCloseTime;
-            _currentDoorState = DoorState.Closing;
-            GetDoorConditionFlags(out var _, out var doorWaitingOpen, out var doorClosing);
-            _gameObject.ModelConditionFlags.Set(doorWaitingOpen, false);
-            _gameObject.ModelConditionFlags.Set(doorClosing, true);
+            SetDoorStateEndFrame(DoorState.Closing, _gameObject.GameContext.GameLogic.CurrentFrame + _moduleData.DoorCloseTime);
             // TODO: What is ModelConditionFlag.Door1WaitingToClose?
+        }
+
+        private void SetDoorStateEndFrame(DoorState doorState, LogicFrame frame)
+        {
+            var doorStatus = new DoorStatus();
+
+            switch (doorState)
+            {
+                case DoorState.Opening:
+                    doorStatus.DoorOpeningUntil = frame;
+                    break;
+                case DoorState.WaitingOpen:
+                    doorStatus.DoorWaitingOpenUntil = frame;
+                    break;
+                case DoorState.Closing:
+                    doorStatus.DoorClosingUntil = frame;
+                    break;
+                case DoorState.Closed:
+                    // resets door state
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(doorState), doorState, null);
+            }
+
+            _doorStatuses[_doorIndex] = doorStatus;
+
+            UpdateDoorModelConditionFlags();
+        }
+
+        private (DoorState DoorState, LogicFrame EndFrame) GetDoorStatus()
+        {
+            var doorStatus = _doorStatuses[_doorIndex];
+
+            if (doorStatus.DoorOpeningUntil > LogicFrame.Zero)
+            {
+                return (DoorState.Opening, doorStatus.DoorOpeningUntil);
+            }
+
+            if (doorStatus.DoorWaitingOpenUntil > LogicFrame.Zero)
+            {
+                return (DoorState.WaitingOpen, doorStatus.DoorWaitingOpenUntil);
+            }
+
+            if (doorStatus.DoorClosingUntil > LogicFrame.Zero)
+            {
+                return (DoorState.Closing, doorStatus.DoorClosingUntil);
+            }
+
+            return (DoorState.Closed, LogicFrame.Zero);
+        }
+
+        private void UpdateDoorModelConditionFlags()
+        {
+            var (doorState, _) = GetDoorStatus();
+
+            GetDoorConditionFlags(out var opening, out var waitingOpen, out var closing);
+
+            _gameObject.ModelConditionFlags.Set(opening, doorState is DoorState.Opening);
+            _gameObject.ModelConditionFlags.Set(waitingOpen, doorState is DoorState.WaitingOpen);
+            _gameObject.ModelConditionFlags.Set(closing, doorState is DoorState.Closing);
         }
 
         private bool ExitsThroughDoor(ObjectDefinition definition)
         {
-            _productionExit ??= _gameObject.FindBehavior<IProductionExit>();
-            if (_productionExit is ParkingPlaceBehaviour parkingPlace)
+            if (ProductionExit is ParkingPlaceBehaviour parkingPlace)
             {
                 return !parkingPlace.ProducedAtHelipad(definition);
             }
@@ -170,8 +229,7 @@ namespace OpenSage.Logic.Object
 
         private void SetDoorIndex()
         {
-            _productionExit ??= _gameObject.FindBehavior<IProductionExit>();
-            if (_productionExit is ParkingPlaceBehaviour parkingPlace)
+            if (ProductionExit is ParkingPlaceBehaviour parkingPlace)
             {
                 _doorIndex = parkingPlace.NextFreeSlot();
             }
@@ -205,31 +263,6 @@ namespace OpenSage.Logic.Object
             }
         }
 
-        private void ProduceObject(ProductionJob job)
-        {
-            switch (job.Type)
-            {
-                case ProductionJobType.Unit:
-                    ProduceObject(job.ObjectDefinition);
-                    break;
-            }
-        }
-
-        private void GrantUpgrade(ProductionJob job)
-        {
-            switch (job.Type)
-            {
-                case ProductionJobType.Upgrade:
-                    GrantUpgrade(job.UpgradeDefinition);
-                    break;
-            }
-        }
-
-        private void GrantUpgrade(UpgradeTemplate upgradeDefinition)
-        {
-            _gameObject.Upgrade(upgradeDefinition);
-        }
-
         internal bool CanProduceObject(ObjectDefinition objectDefinition)
         {
             // only one hero of the same kind can be produced at a time
@@ -244,9 +277,7 @@ namespace OpenSage.Logic.Object
                 }
             }
 
-            _productionExit ??= _gameObject.FindBehavior<IProductionExit>();
-
-            if (_productionExit != null && _productionExit is ParkingPlaceBehaviour parkingPlace)
+            if (ProductionExit is ParkingPlaceBehaviour parkingPlace)
             {
                 return parkingPlace.CanProduceObject(objectDefinition, ProductionQueue);
             }
@@ -294,131 +325,152 @@ namespace OpenSage.Logic.Object
             return (count, progress);
         }
 
-        private void ProduceObject(ObjectDefinition objectDefinition)
+        private void ProduceAndMoveOut(ObjectDefinition objectDefinition, bool playAudio = true)
         {
-            _productionExit ??= _gameObject.FindBehavior<IProductionExit>();
-            if (_productionExit == null)
+            var producedUnit = ProduceObject(objectDefinition, playAudio);
+
+            if (producedUnit != null)
+            {
+                MoveProducedObjectOut(producedUnit);
+            }
+        }
+
+        private GameObject? ProduceObject(ObjectDefinition objectDefinition, bool playAudio)
+        {
+            if (ProductionExit == null)
             {
                 // If there's no IProductionExit behavior on this object, don't emit anything.
-                return;
+                // if we're not ready to spawn a unit, then sit tight
+                return null;
             }
 
-            _producedUnit = _gameObject.Parent.Add(objectDefinition, _gameObject.Owner);
-            _producedUnit.Owner = _gameObject.Owner;
-            _producedUnit.ParentHorde = ParentHorde;
+            ProductionExit.ProduceUnit();
 
-            var isHorde = _producedUnit.Definition.KindOf.Get(ObjectKinds.Horde);
-            if (isHorde)
+            var producedUnit = _gameObject.GameContext.GameLogic.CreateObject(objectDefinition, _gameObject.Owner);
+            producedUnit.Owner = _gameObject.Owner;
+            producedUnit.ParentHorde = ParentHorde;
+
+            if (playAudio)
             {
-                var hordeContain = _producedUnit.FindBehavior<HordeContainBehavior>();
-                ParentHorde = _producedUnit;
-                hordeContain.EnqueuePayload(this, ((QueueProductionExitUpdate)_productionExit).ExitDelay);
+                producedUnit.GameContext.Scene3D.Audio.PlayAudioEvent(producedUnit, producedUnit.Definition.UnitSpecificSounds?.VoiceCreate?.Value);
             }
 
-            if (_productionExit is ParkingPlaceBehaviour parkingPlace)
+            if (!_moduleData.GiveNoXP)
             {
-                var producedAtHelipad = parkingPlace.ProducedAtHelipad(_producedUnit.Definition);
-                _producedUnit.SetTransformMatrix(parkingPlace.GetUnitCreateTransform(producedAtHelipad).Matrix * _gameObject.TransformMatrix);
+                _gameObject.GainExperience((int)producedUnit.Definition.BuildCost);
+            }
+
+            var isHorde = producedUnit.Definition.KindOf.Get(ObjectKinds.Horde);
+            if (isHorde && ProductionExit is QueueProductionExitUpdate queueProductionExitUpdate)
+            {
+                var hordeContain = producedUnit.FindBehavior<HordeContainBehavior>();
+                ParentHorde = producedUnit;
+                hordeContain.EnqueuePayload(this, queueProductionExitUpdate.ExitDelay);
+            }
+
+            if (ProductionExit is ParkingPlaceBehaviour parkingPlace)
+            {
+                var producedAtHelipad = parkingPlace.ProducedAtHelipad(producedUnit.Definition);
+                producedUnit.SetTransformMatrix(parkingPlace.GetUnitCreateTransform(producedAtHelipad).Matrix * _gameObject.TransformMatrix);
 
                 if (!producedAtHelipad)
                 {
-                    parkingPlace.AddVehicle(_producedUnit);
+                    parkingPlace.AddVehicle(producedUnit);
                 }
-                return;
+                return producedUnit;
             }
 
-            _producedUnit.UpdateTransform(_gameObject.ToWorldspace(_productionExit.GetUnitCreatePoint()), _gameObject.Rotation);
+            producedUnit.UpdateTransform(_gameObject.ToWorldspace(ProductionExit.GetUnitCreatePoint()), _gameObject.Rotation);
+
+            return producedUnit;
         }
 
-        private void MoveProducedObjectOut()
+        private void MoveProducedObjectOut(GameObject producedUnit)
         {
-            _productionExit ??= _gameObject.FindBehavior<IProductionExit>();
-            if (_producedUnit == null)
+            if (ProductionExit is ParkingPlaceBehaviour parkingPlace && !parkingPlace.ProducedAtHelipad(producedUnit.Definition))
             {
-                return;
-            }
-
-            if (_productionExit is ParkingPlaceBehaviour parkingPlace && !parkingPlace.ProducedAtHelipad(_producedUnit.Definition))
-            {
-                parkingPlace.ParkVehicle(_producedUnit);
-                _producedUnit = null;
+                parkingPlace.ParkVehicle(producedUnit);
                 return;
             }
 
             // First go to the natural rally point
-            var naturalRallyPoint = _productionExit.GetNaturalRallyPoint().Value;
-            if (naturalRallyPoint != null)
+            var naturalRallyPoint = ProductionExit?.GetNaturalRallyPoint();
+            if (naturalRallyPoint.HasValue)
             {
-                naturalRallyPoint = _gameObject.ToWorldspace(naturalRallyPoint);
-                _producedUnit.AIUpdate.AddTargetPoint(naturalRallyPoint);
+                naturalRallyPoint = _gameObject.ToWorldspace(naturalRallyPoint.Value);
+                producedUnit.AIUpdate.AddTargetPoint(naturalRallyPoint.Value);
             }
 
             // Then go to the rally point if it exists
             if (_gameObject.RallyPoint.HasValue)
             {
-                _producedUnit.AIUpdate.AddTargetPoint(_gameObject.RallyPoint.Value);
+                producedUnit.AIUpdate.AddTargetPoint(_gameObject.RallyPoint.Value);
             }
 
-            HandleHordeCreation();
-            HandleHarvesterUnitCreation();
+            _gameObject.GameContext.AudioSystem.PlayAudioEvent(producedUnit, producedUnit.Definition.SoundMoveStart.Value);
 
-            _producedUnit = null;
+            HandleHordeCreation(producedUnit);
+            HandleHarvesterUnitCreation(_gameObject, producedUnit);
         }
 
-        private void HandleHordeCreation()
+        private void HandleHordeCreation(GameObject producedUnit)
         {
-            if (_producedUnit.Definition.KindOf.Get(ObjectKinds.Horde))
+            if (producedUnit.Definition.KindOf.Get(ObjectKinds.Horde))
             {
-                _currentDoorState = DoorState.OpenForHordePayload;
+                // todo: update with bfme save data
+                // _currentDoorState = DoorState.OpenForHordePayload;
             }
-            else if (_producedUnit.ParentHorde != null)
+            else if (producedUnit.ParentHorde != null)
             {
-                var hordeContain = _producedUnit.ParentHorde.FindBehavior<HordeContainBehavior>();
-                hordeContain.Register(_producedUnit);
+                var hordeContain = producedUnit.ParentHorde.FindBehavior<HordeContainBehavior>();
+                hordeContain.Register(producedUnit);
 
-                var count = _producedUnit.AIUpdate.TargetPoints.Count;
-                var direction = _producedUnit.AIUpdate.TargetPoints[count - 1] - _producedUnit.Translation;
+                var count = producedUnit.AIUpdate.TargetPoints.Count;
+                var direction = producedUnit.AIUpdate.TargetPoints[count - 1] - producedUnit.Translation;
                 if (count > 1)
                 {
-                    direction = _producedUnit.AIUpdate.TargetPoints[count - 1] - _producedUnit.AIUpdate.TargetPoints[count - 2];
+                    direction = producedUnit.AIUpdate.TargetPoints[count - 1] - producedUnit.AIUpdate.TargetPoints[count - 2];
                 }
 
-                var formationOffset = hordeContain.GetFormationOffset(_producedUnit);
+                var formationOffset = hordeContain.GetFormationOffset(producedUnit);
                 var offset = Vector3.Transform(formationOffset, Quaternion.CreateFromYawPitchRoll(MathUtility.GetYawFromDirection(direction.Vector2XY()), 0, 0));
-                _producedUnit.AIUpdate.AddTargetPoint(_producedUnit.AIUpdate.TargetPoints[count - 1] + offset);
-                _producedUnit.AIUpdate.SetTargetDirection(direction);
+                producedUnit.AIUpdate.AddTargetPoint(producedUnit.AIUpdate.TargetPoints[count - 1] + offset);
+                producedUnit.AIUpdate.SetTargetDirection(direction);
             }
         }
 
-        private void HandleHarvesterUnitCreation()
+        public static void HandleHarvesterUnitCreation(GameObject producer, GameObject producedUnit)
         {
             // a supply target (supply center etc.) just spawned a harvester object
-            if (!_gameObject.Definition.KindOf.Get(ObjectKinds.CashGenerator) ||
-                !_producedUnit.Definition.KindOf.Get(ObjectKinds.Harvester) ||
-                !(_producedUnit.AIUpdate is SupplyAIUpdate supplyUpdate))
+            if (!producer.Definition.KindOf.Get(ObjectKinds.CashGenerator) && !producer.Definition.KindOf.Get(ObjectKinds.SupplyGatheringCenter)
+                || !producedUnit.Definition.KindOf.Get(ObjectKinds.Harvester)
+                || !(producedUnit.AIUpdate is SupplyAIUpdate supplyUpdate))
             {
                 return;
             }
 
             supplyUpdate.SupplyGatherState = SupplyAIUpdate.SupplyGatherStates.SearchingForSupplySource;
-            supplyUpdate.CurrentSupplyTarget = _gameObject;
+            supplyUpdate.CurrentSupplyTarget = producer;
         }
 
         internal void QueueProduction(ObjectDefinition objectDefinition)
         {
-            var job = new ProductionJob(objectDefinition, objectDefinition.BuildTime);
+            var job = new ProductionJob(objectDefinition, objectDefinition.BuildTime / _gameObject.ProductionModifier, _nextJobId++,
+                _moduleData.QuantityModifiers.TryGetValue(objectDefinition.Name, out var quantity) ? quantity : 1);
             _productionQueue.Add(job);
+
+            // TODO: Set ModelConditionFlag.ActivelyConstructing.
         }
 
         internal void Spawn(ObjectDefinition objectDefinition)
         {
-            var job = new ProductionJob(objectDefinition);
+            var job = new ProductionJob(objectDefinition, LogicFrameSpan.Zero, _nextJobId++);
             _productionQueue.Insert(0, job);
         }
 
-        internal void SpawnPayload(ObjectDefinition objectDefinition, float buildTime = 0.0f)
+        internal void SpawnPayload(ObjectDefinition objectDefinition, LogicFrameSpan buildTime)
         {
-            var job = new ProductionJob(objectDefinition, buildTime);
+            var job = new ProductionJob(objectDefinition, buildTime / _gameObject.ProductionModifier, _nextJobId++);
             _productionQueue.Insert(1, job);
         }
 
@@ -432,8 +484,13 @@ namespace OpenSage.Logic.Object
 
         internal void QueueUpgrade(UpgradeTemplate upgradeDefinition)
         {
-            var job = new ProductionJob(upgradeDefinition);
+            var job = new ProductionJob(upgradeDefinition, _nextJobId++);
             _productionQueue.Add(job);
+
+            if (upgradeDefinition.Type == UpgradeType.Player)
+            {
+                _gameObject.Owner.AddUpgrade(upgradeDefinition, UpgradeStatus.Queued);
+            }
         }
 
         internal void CancelUpgrade(UpgradeTemplate upgradeDefinition)
@@ -441,37 +498,111 @@ namespace OpenSage.Logic.Object
             var index = -1;
             for (var i = 0; i < _productionQueue.Count; i++)
             {
-                if (_productionQueue[i].UpgradeDefinition == upgradeDefinition) index = i;
+                if (_productionQueue[i].UpgradeDefinition == upgradeDefinition)
+                {
+                    index = i;
+                }
             }
 
-            if (index < 0 || index > _productionQueue.Count) return;
+            if (index < 0 || index > _productionQueue.Count)
+            {
+                return;
+            }
 
             _productionQueue.RemoveAt(index);
+
+            if (upgradeDefinition.Type == UpgradeType.Player)
+            {
+                _gameObject.Owner.CancelUpgrade(upgradeDefinition);
+            }
         }
 
-        public bool CanEnque() => _moduleData.MaxQueueEntries == 0 || _productionQueue.Count < _moduleData.MaxQueueEntries;
+        public bool CanEnqueue() => _moduleData.MaxQueueEntries == 0 || _productionQueue.Count < _moduleData.MaxQueueEntries;
 
         internal override void DrawInspector()
         {
-            ImGuiUtility.ComboEnum("DoorState", ref _currentDoorState);
+            var (currentDoorState, doorStateEndFrame) = GetDoorStatus();
+            ImGui.LabelText("DoorState", currentDoorState.ToString());
+            ImGui.LabelText("DoorStateEndFrame", doorStateEndFrame.Value.ToString());
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistList(_productionQueue, static (StatePersister persister, ref ProductionJob item) =>
             {
-                throw new InvalidDataException();
+                if (persister.Mode is StatePersistMode.Read)
+                {
+                    item = new ProductionJob();
+                }
+
+                persister.PersistObjectValue(item);
+            });
+
+            reader.PersistUInt32(ref _nextJobId);
+
+            var productionJobCount2 = (uint)_productionQueue.Count;
+            reader.PersistUInt32(ref productionJobCount2);
+            if (productionJobCount2 != _productionQueue.Count)
+            {
+                throw new InvalidStateException();
             }
 
-            base.Load(reader);
+            reader.PersistFrame(ref _unknownFrame1);
 
-            var unknown = reader.ReadBytes(89);
+            reader.PersistArray(
+                _doorStatuses,
+                static (StatePersister persister, ref DoorStatus item) =>
+                {
+                    persister.PersistObjectValue(ref item);
+                });
+
+            // this seems to be set for only a single frame upon construction completion
+            // the same may also be true for _unknownFrame1_
+            // in the case of queued production (e.g. red guard), the values set after the first and second red guard are different
+
+            // upon creating the first item, we show CONSTRUCTION_COMPLETE
+            // 01 00 00 00 00 01 01 00 00 00 15 43 4f 4e 53 54 52 55 43 54 49 4f 4e 5f 43 4f 4d 50 4c 45 54 45 01
+
+            // after creating the second item, we show ACTIVELY_CONSTRUCTING CONSTRUCTION_COMPLETE, but only for one frame? seems like a bug
+            // CONSTRUCTION_COMPLETE is only set for the one frame where we spawn something
+            // this logic only persists object modelconditionstate for a _single frame_. It's unclear why.
+
+            // some more examples
+
+            // productionupdate ACTIVELY_CONSTRUCTING CONSTRUCTION_COMPLETE
+            // 01 01 00 00 00 15 41 43 54 49 56 45 4c 59 5f 43 4f 4e 53 54 52 55 43 54 49 4e 47 01 01 00 00 00 15 43 4f 4e 53 54 52 55 43 54 49 4f 4e 5f 43 4f 4d 50 4c 45 54 45 01
+
+            // productionupdate DOOR1_OPENING CONSTRUCTION_COMPLETE
+            // 01 00 00 00 00 01 02 00 00 00 0e 44 4f 4f 52 5f 31 5f 4f 50 45 4e 49 4e 47 15 43 4f 4e 53 54 52 55 43 54 49 4f 4e 5f 43 4f 4d 50 4c 45 54 45 01
+
+            // it's unclear how this should be parsed
+
+            reader.BeginArray("UnknownArray");
+            for (var i = 0; i < 2; i++)
+            {
+                var unknown1 = true;
+                reader.PersistBooleanValue(ref unknown1);
+                if (!unknown1)
+                {
+                    throw new InvalidStateException();
+                }
+
+                reader.SkipUnknownBytes(4);
+            }
+            reader.EndArray();
+
+            reader.SkipUnknownBytes(1);
         }
     }
 
     /// <summary>
-    /// Required on an object that uses PublicTimer code for any SpecialPower and/or required for 
+    /// Required on an object that uses PublicTimer code for any SpecialPower and/or required for
     /// units/structures with object upgrades.
     /// </summary>
     public sealed class ProductionUpdateModuleData : UpdateModuleData
@@ -481,12 +612,12 @@ namespace OpenSage.Logic.Object
         private static readonly IniParseTable<ProductionUpdateModuleData> FieldParseTable = new IniParseTable<ProductionUpdateModuleData>
         {
             { "NumDoorAnimations", (parser, x) => x.NumDoorAnimations = parser.ParseInteger() },
-            { "DoorOpeningTime", (parser, x) => x.DoorOpeningTime = parser.ParseTimeMilliseconds() },
-            { "DoorWaitOpenTime", (parser, x) => x.DoorWaitOpenTime = parser.ParseTimeMilliseconds() },
-            { "DoorCloseTime", (parser, x) => x.DoorCloseTime = parser.ParseTimeMilliseconds() },
-            { "ConstructionCompleteDuration", (parser, x) => x.ConstructionCompleteDuration = parser.ParseTimeMilliseconds() },
+            { "DoorOpeningTime", (parser, x) => x.DoorOpeningTime = parser.ParseTimeMillisecondsToLogicFrames() },
+            { "DoorWaitOpenTime", (parser, x) => x.DoorWaitOpenTime = parser.ParseTimeMillisecondsToLogicFrames() },
+            { "DoorCloseTime", (parser, x) => x.DoorCloseTime = parser.ParseTimeMillisecondsToLogicFrames() },
+            { "ConstructionCompleteDuration", (parser, x) => x.ConstructionCompleteDuration = parser.ParseTimeMillisecondsToLogicFrames() },
             { "MaxQueueEntries", (parser, x) => x.MaxQueueEntries = parser.ParseInteger() },
-            { "QuantityModifier", (parser, x) => x.QuantityModifier = Object.QuantityModifier.Parse(parser) },
+            { "QuantityModifier", (parser, x) => x.QuantityModifiers[parser.ParseAssetReference()] = parser.ParseUnsignedInteger() },
 
             { "DisabledTypesToProcess", (parser, x) => x.DisabledTypesToProcess = parser.ParseEnumBitArray<DisabledType>() },
             { "VeteranUnitsFromVeteranFactory", (parser, x) => x.VeteranUnitsFromVeteranFactory = parser.ParseBoolean() },
@@ -508,31 +639,34 @@ namespace OpenSage.Logic.Object
         /// <summary>
         /// How long doors should be opening for.
         /// </summary>
-        public TimeSpan DoorOpeningTime { get; private set; }
+        public LogicFrameSpan DoorOpeningTime { get; private set; }
 
         /// <summary>
         /// Time the door stays open so units can exit.
         /// </summary>
-        public TimeSpan DoorWaitOpenTime { get; private set; }
+        public LogicFrameSpan DoorWaitOpenTime { get; private set; }
 
         /// <summary>
         /// How long doors should be closing for.
         /// </summary>
-        public TimeSpan DoorCloseTime { get; private set; }
+        public LogicFrameSpan DoorCloseTime { get; private set; }
 
         /// <summary>
         /// Wait time between units.
         /// </summary>
-        public TimeSpan ConstructionCompleteDuration { get; private set; }
+        public LogicFrameSpan ConstructionCompleteDuration { get; private set; }
 
         public int MaxQueueEntries { get; private set; }
 
         /// <summary>
         /// Red Guards use this so that they can come out of the barracks in pairs.
         /// </summary>
-        public QuantityModifier? QuantityModifier { get; private set; }
+        /// <remarks>
+        /// The engine <i>does</i> support multiple <c>QuantityModifier</c>s.
+        /// </remarks>
+        public Dictionary<string, uint> QuantityModifiers { get; } = [];
 
-        public BitArray<DisabledType> DisabledTypesToProcess { get; private set; }
+        public BitArray<DisabledType> DisabledTypesToProcess { get; private set; } = new();
 
         [AddedIn(SageGame.Bfme)]
         public bool VeteranUnitsFromVeteranFactory { get; private set; }
@@ -541,10 +675,10 @@ namespace OpenSage.Logic.Object
         public bool SetBonusModelConditionOnSpeedBonus { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public string BonusForType { get; private set; }
+        public string? BonusForType { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
-        public string SpeedBonusAudioLoop { get; private set; }
+        public string? SpeedBonusAudioLoop { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
         public int UnitInvulnerableTime { get; private set; }
@@ -564,21 +698,6 @@ namespace OpenSage.Logic.Object
         }
     }
 
-    public struct QuantityModifier
-    {
-        internal static QuantityModifier Parse(IniParser parser)
-        {
-            return new QuantityModifier
-            {
-                ObjectName = parser.ParseAssetReference(),
-                Count = parser.ParseInteger()
-            };
-        }
-
-        public string ObjectName { get; private set; }
-        public int Count { get; private set; }
-    }
-
     [AddedIn(SageGame.Bfme2)]
     public class ProductionModifier
     {
@@ -594,33 +713,63 @@ namespace OpenSage.Logic.Object
             { "HeroRevive", (parser, x) => x.HeroRevive = parser.ParseBoolean() }
         };
 
-        public string RequiredUpgrade { get; private set; }
+        public string? RequiredUpgrade { get; private set; }
         public float CostMultiplier { get; private set; }
         public float TimeMultiplier { get; private set; }
-        public ObjectFilter ModifierFilter { get; private set; }
+        public ObjectFilter ModifierFilter { get; private set; } = new();
         public bool HeroPurchase { get; private set; }
         public bool HeroRevive { get; private set; }
     }
 
     public enum DisabledType
     {
+        [IniEnum("DEFAULT")]
         Default,
+
         UserParalyzed,
+
+        [IniEnum("DISABLED_EMP")]
         Emp,
 
         [IniEnum("DISABLED_HELD")]
         Held,
 
+        [IniEnum("DISABLED_PARALYZED")]
         Paralyzed,
+
+        [IniEnum("DISABLED_UNMANNED")]
         Unmanned,
 
         [IniEnum("DISABLED_UNDERPOWERED")]
         Underpowered,
 
+        [IniEnum("DISABLED_FREEFALL")]
         Freefall,
-        TemporarilyBusy,
+
+        [IniEnum("DISABLED_SCRIPT_DISABLED")]
         ScriptDisabled,
+
+        [IniEnum("DISABLED_SCRIPT_UNDERPOWERED")]
         ScriptUnderpowered,
+
+        TemporarilyBusy,
+
         Infiltrated,
+    }
+
+    internal struct DoorStatus : IPersistableObject
+    {
+        public LogicFrame DoorOpeningUntil;
+        public LogicFrame DoorWaitingOpenUntil;
+        public LogicFrame DoorClosingUntil;
+
+        public void Persist(StatePersister reader)
+        {
+            reader.PersistLogicFrame(ref DoorOpeningUntil);
+            reader.PersistLogicFrame(ref DoorWaitingOpenUntil);
+            reader.PersistLogicFrame(ref DoorClosingUntil);
+
+            reader.SkipUnknownBytes(4);
+        }
     }
 }

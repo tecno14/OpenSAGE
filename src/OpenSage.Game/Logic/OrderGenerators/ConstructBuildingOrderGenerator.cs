@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Numerics;
 using OpenSage.Graphics.Cameras;
@@ -14,7 +14,7 @@ namespace OpenSage.Logic.OrderGenerators
     // 1. Builder dies
     // 2. We lose access to the building
     // 3. Player right-clicks
-    public sealed class ConstructBuildingOrderGenerator : IOrderGenerator, IDisposable
+    public sealed class ConstructBuildingOrderGenerator : OrderGenerator, IDisposable
     {
         private readonly ObjectDefinition _buildingDefinition;
         private readonly int _definitionIndex;
@@ -24,9 +24,8 @@ namespace OpenSage.Logic.OrderGenerators
         private readonly GameObject _previewObject;
 
         private float _angle;
-        private Vector3 _position;
 
-        public bool CanDrag { get; } = true;
+        public override bool CanDrag => true;
 
         internal ConstructBuildingOrderGenerator(
             ObjectDefinition buildingDefinition,
@@ -34,7 +33,7 @@ namespace OpenSage.Logic.OrderGenerators
             GameData config,
             Player player,
             GameContext gameContext,
-            Scene3D scene)
+            Scene3D scene) : base(gameContext.Game)
         {
             _buildingDefinition = buildingDefinition;
             _definitionIndex = definitionIndex;
@@ -47,18 +46,19 @@ namespace OpenSage.Logic.OrderGenerators
             _previewObject = new GameObject(
                 buildingDefinition,
                 gameContext,
-                player,
-                null)
+                player)
             {
                 IsPlacementPreview = true
             };
+
+            _scene.BuildPreviewObject = _previewObject;
 
             UpdatePreviewObjectPosition();
             UpdatePreviewObjectAngle();
             UpdateValidity();
         }
 
-        public void BuildRenderList(RenderList renderList, Camera camera, in TimeInterval gameTime)
+        public override void BuildRenderList(RenderList renderList, Camera camera, in TimeInterval gameTime)
         {
             // TODO: Draw arrow (locater02.w3d) to visualise rotation angle.
 
@@ -66,7 +66,7 @@ namespace OpenSage.Logic.OrderGenerators
             _previewObject.BuildRenderList(renderList, camera, gameTime);
         }
 
-        public OrderGeneratorResult TryActivate(Scene3D scene, KeyModifiers keyModifiers)
+        public override OrderGeneratorResult TryActivate(Scene3D scene, KeyModifiers keyModifiers)
         {
             if (scene.Game.SageGame == SageGame.Bfme)
             {
@@ -78,7 +78,7 @@ namespace OpenSage.Logic.OrderGenerators
 
             if (!IsValidPosition())
             {
-                scene.Audio.PlayAudioEvent(dozer, dozer.Definition.UnitSpecificSounds?["VoiceNoBuild"]?.Value);
+                scene.Audio.PlayAudioEvent(dozer, dozer.Definition.UnitSpecificSounds?.VoiceNoBuild?.Value);
 
                 // TODO: Display correct message:
                 // - GUI:CantBuildRestrictedTerrain
@@ -92,19 +92,15 @@ namespace OpenSage.Logic.OrderGenerators
             }
 
             var player = scene.LocalPlayer;
-            if (player.Money < _buildingDefinition.BuildCost)
+            if (player.BankAccount.Money < _buildingDefinition.BuildCost)
             {
                 return OrderGeneratorResult.Failure("Not enough cash for construction");
             }
 
-            scene.Audio.PlayAudioEvent(dozer, dozer.Definition.UnitSpecificSounds?["VoiceCreate"]?.Value);
-
             var playerIdx = scene.GetPlayerIndex(player);
-            var moveOrder = Order.CreateMoveOrder(playerIdx, _position);
-            var buildOrder = Order.CreateBuildObject(playerIdx, _definitionIndex, _position, _angle);
+            var buildOrder = Order.CreateBuildObject(playerIdx, _definitionIndex, WorldPosition, _angle);
 
-            // TODO: Also send an order to builder to start building.
-            return OrderGeneratorResult.SuccessAndExit(new[] { moveOrder, buildOrder });
+            return OrderGeneratorResult.SuccessAndExit(new[] { buildOrder });
         }
 
         private bool IsValidPosition()
@@ -113,18 +109,21 @@ namespace OpenSage.Logic.OrderGenerators
             // TODO: Check that the builder can reach target position
             // TODO: Check that the terrain is even enough at the target position
 
-            if (_previewObject.Collider == null)
-            {
-                return true;
-            }
+            var existingObjects = _scene.Game.PartitionCellManager.QueryObjects(
+                _previewObject,
+                _previewObject.Translation,
+                _previewObject.Geometry.BoundingSphereRadius,
+                new PartitionQueries.CollidesWithObjectQuery(_previewObject));
 
-            _scene.Quadtree.Remove(_previewObject);
-            return !_scene.Quadtree.FindIntersecting(_previewObject.Collider).Any();
+            // as long as the items in our way are not structures and not owned by our enemy, we can build here
+            return !_scene.Quadtree.FindIntersecting(_previewObject).Any(u =>
+                u.Definition.KindOf.Get(ObjectKinds.Structure) ||
+                _scene.LocalPlayer.Enemies.Contains(u.Owner));
         }
 
-        public void UpdatePosition(Vector2 mousePosition, Vector3 worldPosition)
+        public override void UpdatePosition(Vector2 mousePosition, Vector3 worldPosition)
         {
-            _position = worldPosition;
+            base.UpdatePosition(mousePosition, worldPosition);
 
             UpdatePreviewObjectPosition();
             UpdateValidity();
@@ -132,13 +131,15 @@ namespace OpenSage.Logic.OrderGenerators
 
         private void UpdatePreviewObjectPosition()
         {
-            _previewObject.SetTranslation(_position);
+            _previewObject.SetTranslation(WorldPosition);
+            _previewObject.UpdateColliders();
+            _previewObject.BuildProgress = 1.0f;
         }
 
-        public void UpdateDrag(Vector3 position)
+        public override void UpdateDrag(Vector3 position)
         {
             // Calculate angle from building position to current unprojected mouse position.
-            var direction = position.Vector2XY() - _position.Vector2XY();
+            var direction = position.Vector2XY() - WorldPosition.Vector2XY();
             _angle = MathUtility.GetYawFromDirection(direction);
 
             UpdatePreviewObjectAngle();
@@ -152,16 +153,17 @@ namespace OpenSage.Logic.OrderGenerators
 
         private void UpdateValidity()
         {
-            // TODO: draw collider bounds in debug view when 'showBounds'
             _previewObject.IsPlacementInvalid = !IsValidPosition();
         }
 
         // Use radial cursor.
-        public string GetCursor(KeyModifiers keyModifiers) => null;
+        public override string GetCursor(KeyModifiers keyModifiers) => null;
 
         public void Dispose()
         {
+            _scene.Quadtree.Remove(_previewObject);
             _previewObject.Dispose();
+            _scene.BuildPreviewObject = null;
         }
     }
 }

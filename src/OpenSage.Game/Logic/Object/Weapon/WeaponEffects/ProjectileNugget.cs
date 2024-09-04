@@ -19,7 +19,7 @@ namespace OpenSage.Logic.Object
             {
                 { "ProjectileTemplateName", (parser, x) => x.ProjectileTemplate = parser.ParseObjectReference() },
                 { "WarheadTemplateName", (parser, x) => x.WarheadTemplate = parser.ParseWeaponTemplateReference() },
-                
+
                 { "AlwaysAttackHereOffset", (parser, x) => x.AlwaysAttackHereOffset = parser.ParseVector3() },
                 { "UseAlwaysAttackOffset", (parser, x) => x.UseAlwaysAttackOffset = parser.ParseBoolean() },
                 { "WeaponLaunchBoneSlotOverride", (parser, x) => x.WeaponLaunchBoneSlotOverride = parser.ParseEnum<WeaponSlot>() }
@@ -57,16 +57,16 @@ namespace OpenSage.Logic.Object
                 warheadTemplate = WarheadTemplate.Value;
             }
 
-            var projectileObject = context.GameContext.GameObjects.Add(
+            var projectileObject = context.GameContext.GameLogic.CreateObject(
                 projectileTemplate,
                 context.Weapon.ParentGameObject.Owner);
 
-            var launchBoneTransform = context.Weapon.ParentGameObject.GetWeaponLaunchBoneTransform(
+            var launchBoneTransform = context.Weapon.ParentGameObject.Drawable.GetWeaponLaunchBoneTransform(
                 context.Weapon.Slot, context.Weapon.WeaponIndex);
 
             projectileObject.SetTransformMatrix(launchBoneTransform.Value);
 
-            projectileObject.SetWeapon(warheadTemplate);
+            projectileObject.SetWarhead(warheadTemplate);
 
             projectileObject.CurrentWeapon.SetTarget(context.Weapon.CurrentTarget);
 

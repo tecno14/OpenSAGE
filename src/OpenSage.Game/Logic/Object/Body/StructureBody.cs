@@ -1,31 +1,25 @@
-﻿using System.IO;
-using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+﻿using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
     public sealed class StructureBody : ActiveBody
     {
-        internal StructureBody(GameObject gameObject, StructureBodyModuleData moduleData)
-            : base(gameObject, moduleData)
+        private uint _unknown;
+
+        internal StructureBody(GameObject gameObject, GameContext context, StructureBodyModuleData moduleData)
+            : base(gameObject, context, moduleData)
         {
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
 
-            var unknown = reader.ReadUInt32();
-            if (unknown != 0)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistUInt32(ref _unknown);
         }
     }
 
@@ -39,9 +33,9 @@ namespace OpenSage.Logic.Object
         private static new readonly IniParseTable<StructureBodyModuleData> FieldParseTable = ActiveBodyModuleData.FieldParseTable
             .Concat(new IniParseTable<StructureBodyModuleData>());
 
-        internal override BodyModule CreateBodyModule(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new StructureBody(gameObject, this);
+            return new StructureBody(gameObject, context, this);
         }
     }
 }

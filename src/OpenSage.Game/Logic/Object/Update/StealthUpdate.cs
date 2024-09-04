@@ -3,6 +3,50 @@ using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class StealthUpdate : UpdateModule
+    {
+        private uint _unknownFrame1;
+        private uint _unknownFrame2;
+        private float _unknownFloat1;
+        private float _unknownFloat2;
+
+        internal override void Load(StatePersister reader)
+        {
+            var version = reader.PersistVersion(2);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistFrame(ref _unknownFrame1);
+            reader.PersistFrame(ref _unknownFrame2);
+
+            var unknownBool1 = true;
+            reader.PersistBoolean(ref unknownBool1);
+            if (!unknownBool1)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistSingle(ref _unknownFloat1);
+            reader.PersistSingle(ref _unknownFloat2);
+
+            var unknownInt2 = -1;
+            reader.PersistInt32(ref unknownInt2);
+            if (unknownInt2 != -1)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.SkipUnknownBytes(8);
+
+            if (version >= 2)
+            {
+                reader.SkipUnknownBytes(4);
+            }
+        }
+    }
+
     /// <summary>
     /// Allows the use of the <see cref="ObjectDefinition.SoundStealthOn"/> and 
     /// <see cref="ObjectDefinition.SoundStealthOff"/> parameters on the object and is hardcoded to 
@@ -131,5 +175,10 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.Bfme2)]
         public string[] RequiredUpgradeNames { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new StealthUpdate();
+        }
     }
 }

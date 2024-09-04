@@ -36,11 +36,11 @@ namespace OpenSage.Logic.Object
 
             _nextIndex++;
 
-            return modelInstance.AbsoluteBoneTransforms[bone.Index].Translation;
+            return modelInstance.RelativeBoneTransforms[bone.Index].Translation;
         }
 
         private (ModelInstance, ModelBone) FindBone(int index)
-            => _gameObject.FindBone(_moduleData.SpawnPointBoneName + index.ToString("D2"));
+            => _gameObject.Drawable.FindBone(_moduleData.SpawnPointBoneName + index.ToString("D2"));
 
         Vector3? IProductionExit.GetNaturalRallyPoint() => null;
     }

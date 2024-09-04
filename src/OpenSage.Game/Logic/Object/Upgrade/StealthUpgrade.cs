@@ -2,6 +2,23 @@
 
 namespace OpenSage.Logic.Object
 {
+    internal sealed class StealthUpgrade : UpgradeModule
+    {
+        public StealthUpgrade(GameObject gameObject, StealthUpgradeModuleData moduleData)
+            : base(gameObject, moduleData)
+        {
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
+    }
+
     /// <summary>
     /// Eenables use of <see cref="StealthUpdateModuleData"/> module on this object. Requires 
     /// <see cref="StealthUpdateModuleData.InnateStealth"/> = No defined in the <see cref="StealthUpdateModuleData"/> 
@@ -13,5 +30,10 @@ namespace OpenSage.Logic.Object
 
         private static new readonly IniParseTable<StealthUpgradeModuleData> FieldParseTable = UpgradeModuleData.FieldParseTable
             .Concat(new IniParseTable<StealthUpgradeModuleData>());
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new StealthUpgrade(gameObject, this);
+        }
     }
 }

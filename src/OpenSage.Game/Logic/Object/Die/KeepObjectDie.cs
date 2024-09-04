@@ -2,6 +2,22 @@
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class KeepObjectDie : DieModule
+    {
+        public KeepObjectDie(KeepObjectDieModuleData moduleData) : base(moduleData)
+        {
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
+    }
+
     public sealed class KeepObjectDieModuleData : DieModuleData
     {
         internal static KeepObjectDieModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
@@ -18,5 +34,10 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.Bfme2)]
         public bool StayOnRadar { get; private set; }
+
+        internal override KeepObjectDie CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new KeepObjectDie(this);
+        }
     }
 }

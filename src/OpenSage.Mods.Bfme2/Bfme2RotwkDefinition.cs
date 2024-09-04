@@ -4,7 +4,8 @@ using OpenSage.Data;
 using OpenSage.Gui;
 using OpenSage.Gui.Apt;
 using OpenSage.Gui.ControlBar;
-using OpenSage.Gui.UnitOverlay;
+using OpenSage.Gui.CommandListOverlay;
+using System.IO;
 
 namespace OpenSage.Mods.Bfme2
 {
@@ -30,15 +31,21 @@ namespace OpenSage.Mods.Bfme2
         public string Identifier { get; } = "bfme2_rotwk";
 
         public IMainMenuSource MainMenu { get; } = new AptMainMenuSource("MainMenu.apt");
-        public IControlBarSource ControlBar { get; }
-        public IUnitOverlaySource UnitOverlay => null;
+        public IControlBarSource? ControlBar { get; }
+        public ICommandListOverlaySource? CommandListOverlay => null;
 
         public uint ScriptingTicksPerSecond => 5;
+
+        public string GetLocalizedStringsPath(string language) => language == "German"
+            ? "lotr"
+            : Path.Combine("data", "lotr");
 
         public OnDemandAssetLoadStrategy CreateAssetLoadStrategy()
         {
             return new OnDemandAssetLoadStrategy(PathResolvers.Bfme2W3d, PathResolvers.Bfme2Texture);
         }
+
+        public Scene25D CreateScene25D(Scene3D scene3D, AssetStore assetStore) => new(scene3D, assetStore);
 
         public static Bfme2RotwkDefinition Instance { get; } = new Bfme2RotwkDefinition();
 

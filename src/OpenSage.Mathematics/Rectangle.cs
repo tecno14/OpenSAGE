@@ -14,6 +14,9 @@ namespace OpenSage.Mathematics
 
         public Point2D Center => new Point2D(X + Width / 2, Y + Height / 2);
 
+        public Point2D TopLeft => Location;
+        public Point2D BottomRight => new Point2D(X + Width, Y + Height);
+
         public int Left => X;
         public int Right => X + Width;
         public int Top => Y;
@@ -52,7 +55,7 @@ namespace OpenSage.Mathematics
         //        Top < value.Bottom;
         //}
 
-        
+
         //public static Rectangle Intersect(in Rectangle value1, in Rectangle value2)
         //{
         //    if (value1.Intersects(value2))
@@ -83,7 +86,7 @@ namespace OpenSage.Mathematics
 
         public RectangleF ToRectangleF() => new RectangleF(X, Y, Width, Height);
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
             if (!(obj is Rectangle))
             {

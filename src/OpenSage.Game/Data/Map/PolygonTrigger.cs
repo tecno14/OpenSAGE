@@ -1,13 +1,12 @@
 ﻿using System;
 using System.IO;
 using System.Numerics;
-using OpenSage.Data.Utilities.Extensions;
 using OpenSage.FileFormats;
 using OpenSage.Mathematics;
 
 namespace OpenSage.Data.Map
 {
-    public sealed class PolygonTrigger
+    public sealed class PolygonTrigger : IPersistableObject
     {
         public string Name { get; private set; }
         public string LayerName { get; private set; }
@@ -35,7 +34,11 @@ namespace OpenSage.Data.Map
         public ColorRgb RiverColor { get; private set; }
         public float RiverAlpha { get; private set; }
 
-        public MapVector3i[] Points { get; private set; }
+        public Point3D[] Points { get; private set; }
+
+        public Rectangle Bounds { get; private set; }
+
+        public float Radius { get; private set; }
 
         internal static PolygonTrigger Parse(BinaryReader reader, ushort version)
         {
@@ -80,11 +83,11 @@ namespace OpenSage.Data.Map
             }
 
             var numPoints = reader.ReadUInt32();
-            result.Points = new MapVector3i[numPoints];
+            result.Points = new Point3D[numPoints];
 
             for (var i = 0; i < numPoints; i++)
             {
-                result.Points[i] = MapVector3i.Parse(reader);
+                result.Points[i] = reader.ReadPoint3D();
             }
 
             return result;
@@ -129,8 +132,77 @@ namespace OpenSage.Data.Map
 
             foreach (var point in Points)
             {
-                point.WriteTo(writer);
+                writer.Write(point);
             }
+        }
+
+        public bool IsPointInside(in Vector3 point)
+        {
+            var point2D = new Point2D((int)point.X, (int)point.Y);
+
+            // Coarse test so we can early-out.
+            if (!Bounds.Contains(point2D))
+            {
+                return false;
+            }
+
+            // Algorithm from here - "PNPOLY - Point Inclusion in Polygon Test"
+            // https://wrf.ecse.rpi.edu/Research/Short_Notes/pnpoly.html
+            var inside = false;
+            int i, j;
+            for (i = 0, j = Points.Length - 1; i < Points.Length; j = i++)
+            {
+                ref readonly var lastPoint = ref Points[j];
+                ref readonly var thisPoint = ref Points[i];
+
+                if (((thisPoint.Y > point2D.Y) != (lastPoint.Y > point2D.Y)) &&
+                    (point2D.X < (lastPoint.X - thisPoint.X) * (point2D.Y - thisPoint.Y) / (lastPoint.Y - thisPoint.Y) + thisPoint.X))
+                {
+                    inside = !inside;
+                }
+            }
+
+            return inside;
+        }
+
+        public void Persist(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.PersistArrayWithUInt32Length(
+                Points,
+                static (StatePersister persister, ref Point3D item) =>
+                {
+                    persister.PersistPoint3DValue(ref item);
+                });
+
+            var topLeft = Bounds.TopLeft;
+            reader.PersistPoint2D(ref topLeft);
+
+            var bottomRight = Bounds.BottomRight;
+            reader.PersistPoint2D(ref bottomRight);
+
+            Bounds = Rectangle.FromCorners(topLeft, bottomRight);
+
+            // The following value is what you get if you do this calculation:
+            // width = (bottomRight.X - topLeft.X) * 0.5
+            // height = (bottomRight.Y + topLeft.Y) * 0.5
+            // value = sqrt(width * width + height * height)
+            //
+            // This looks like it's supposed to be a radius for this polygon trigger,
+            // presumably used for quick distance tests prior to testing if
+            // a point is inside the actual polygon.
+            //
+            // But there's a mistake... the height should instead be:
+            // height = (bottomRight.Y - topLeft.Y) * 0.5
+            //
+            // As it is, this "radius" is significantly larger than it should be.
+            var buggyRadius = 0.0f;
+            reader.PersistSingle(ref buggyRadius);
+
+            Radius = MathF.Sqrt(Bounds.Width * Bounds.Width + Bounds.Height * Bounds.Height);
+
+            reader.SkipUnknownBytes(1);
         }
     }
 

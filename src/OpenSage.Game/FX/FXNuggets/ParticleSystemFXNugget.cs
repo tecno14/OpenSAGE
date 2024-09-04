@@ -89,13 +89,11 @@ namespace OpenSage.FX
                 position.Z = context.GameContext.Terrain.HeightMap.GetHeight(position.X, position.Y);
             }
 
-            worldMatrix.Translation = position;
+            worldMatrix.Translation = position + Offset;
 
-            var particleSystem = context.GameContext.ParticleSystems.Create(
+            context.GameContext.ParticleSystems.Create(
                 Template.Value,
                 worldMatrix);
-
-            particleSystem.Activate();
         }
     }
 }

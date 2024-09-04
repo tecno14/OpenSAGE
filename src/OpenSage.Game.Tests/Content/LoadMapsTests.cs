@@ -25,20 +25,27 @@ namespace OpenSage.Tests.Content
 
             Platform.Start();
 
-            using (var game = new Game(installation, GraphicsBackend.Direct3D11))
+            using (var game = new Game(installation))
             {
-                var maps = game.ContentManager.FileSystem.GetFiles("maps").Where(x => x.FilePath.EndsWith(".map")).ToList();
+                var maps = game.ContentManager.FileSystem
+                    .GetFilesInDirectory("maps", "*.map")
+                    .ToList();
 
                 foreach (var map in maps)
                 {
                     _testOutputHelper.WriteLine($"Loading {map.FilePath}...");
 
-                    game.AssetStore.PushScope();
-                    using (var scene = game.LoadMap(map.FilePath))
-                    {
-                        Assert.NotNull(scene);
-                    }
-                    game.AssetStore.PopScope();
+                    //game.AssetStore.PushScope();
+
+                    throw new System.NotImplementedException();
+
+                    // TODO: Need to update to use new way of starting game.
+                    //using (var scene = game.LoadMap(map.FilePath))
+                    //{
+                    //    Assert.NotNull(scene);
+                    //}
+
+                    //game.AssetStore.PopScope();
                 }
             }
 

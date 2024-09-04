@@ -6,12 +6,14 @@ using OpenSage.FileFormats;
 
 namespace OpenSage.Scripting
 {
-    public sealed class ScriptGroup : Asset
+    public sealed class ScriptGroup : Asset, IPersistableObject
     {
         public const string AssetName = "ScriptGroup";
 
+        private bool _isActive;
+
         public string Name { get; private set; }
-        public bool IsActive { get; private set; }
+        public bool IsActive => _isActive;
         public bool IsSubroutine { get; private set; }
         public Script[] Scripts { get; private set; }
 
@@ -89,7 +91,7 @@ namespace OpenSage.Scripting
                 return new ScriptGroup
                 {
                     Name = name,
-                    IsActive = isActive,
+                    _isActive = isActive,
                     IsSubroutine = isSubroutine,
                     Scripts = scripts.ToArray(),
                     Groups = groups.ToArray()
@@ -119,21 +121,21 @@ namespace OpenSage.Scripting
             });
         }
 
-        internal void Load(BinaryReader reader)
+        public void Persist(StatePersister reader)
         {
-            var version = reader.ReadVersion();
+            var version = reader.PersistVersion(2);
 
-            var numScripts = reader.ReadUInt16();
-
-            if (numScripts != Scripts.Length)
+            if (version >= 2)
             {
-                throw new InvalidDataException();
+                reader.PersistBoolean(ref _isActive);
             }
 
-            for (var i = 0; i < numScripts; i++)
-            {
-                Scripts[i].Load(reader);
-            }
+            reader.PersistArrayWithUInt16Length(
+                Scripts,
+                static (StatePersister persister, ref Script item) =>
+                {
+                    persister.PersistObjectValue(item);
+                });
         }
 
         public ScriptGroup Copy(string appendix)
@@ -141,7 +143,7 @@ namespace OpenSage.Scripting
             return new ScriptGroup()
             {
                 Groups = Groups.Select(g => g.Copy(appendix)).ToArray(),
-                IsActive = IsActive,
+                _isActive = _isActive,
                 IsSubroutine = IsSubroutine,
                 Name = Name + appendix,
                 Scripts = Scripts.Select(s => s.Copy(appendix)).ToArray()

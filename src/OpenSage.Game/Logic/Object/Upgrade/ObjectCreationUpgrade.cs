@@ -1,12 +1,10 @@
-﻿using System.IO;
-using System.Numerics;
+﻿using System.Numerics;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class ObjectCreationUpgrade : UpgradeModule
+    internal sealed class ObjectCreationUpgrade : UpgradeModule
     {
         private readonly ObjectCreationUpgradeModuleData _moduleData;
 
@@ -16,41 +14,31 @@ namespace OpenSage.Logic.Object
             _moduleData = moduleData;
         }
 
-        internal override void OnTrigger(BehaviorUpdateContext context, bool triggered)
+        protected override void OnUpgrade()
         {
-            if (triggered)
+            // TODO: Get rid of this context thing.
+            var context = new BehaviorUpdateContext(_gameObject.GameContext, _gameObject);
+
+            foreach (var item in _moduleData.UpgradeObject.Value.Nuggets)
             {
-                foreach (var item in _moduleData.UpgradeObject.Value.Nuggets)
-                {
-                    var createdObjects = item.Execute(context);
+                var createdObjects = item.Execute(context);
 
-                    foreach (var createdObject in createdObjects)
-                    {
-                        var slavedUpdateBehaviour = createdObject.FindBehavior<SlavedUpdateModule>();
-                        if (slavedUpdateBehaviour != null)
-                        {
-                            slavedUpdateBehaviour.Master = context.GameObject;
-                        }
-                    }
-                }
-
-                foreach (var upgrade in _moduleData.ConflictsWith)
+                foreach (var createdObject in createdObjects)
                 {
-                    if (upgrade == null) continue; 
-                    _gameObject.ConflictingUpgrades.Add(upgrade.Value);
+                    createdObject.CreatedByObjectID = _gameObject.ID;
+                    var slavedUpdateBehaviour = createdObject.FindBehavior<SlavedUpdateModule>();
+                    slavedUpdateBehaviour?.SetMaster(_gameObject);
                 }
             }
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 

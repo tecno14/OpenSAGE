@@ -1,11 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Numerics;
-using System.Text.RegularExpressions;
 using OpenSage.Content;
-using OpenSage.Data.Ini;
+using OpenSage.Diagnostics.Util;
+using OpenSage.IO;
 using OpenSage.Logic.Object;
 using OpenSage.Scripting;
 
@@ -14,6 +13,7 @@ namespace OpenSage.Data.Map
     internal class UserMapCache
     {
         private const string MapCacheIniPath = @"Maps\MapCache.ini";
+        private static readonly DistinctLogger Logger = new(NLog.LogManager.GetCurrentClassLogger());
 
         private readonly ContentManager _contentManager;
 
@@ -21,7 +21,7 @@ namespace OpenSage.Data.Map
         {
             _contentManager = contentManager;
         }
-        
+
         internal void Initialize(AssetStore assetStore)
         {
             // We need to check if there is an existing MapCache.ini file and if yes,
@@ -41,9 +41,11 @@ namespace OpenSage.Data.Map
 
             foreach (var mapEntry in EnumerateMaps())
             {
+                var mapEntryFullPath = _contentManager.UserDataFileSystem.GetFullPath(mapEntry);
+
                 var buildMapCache = false;
-                var mapCache = assetStore.MapCaches.GetByName(mapEntry.FullFilePath);
-                var fileInfo = new FileInfo(mapEntry.FullFilePath);
+                var mapCache = assetStore.MapCaches.GetByName(mapEntryFullPath);
+                var fileInfo = new FileInfo(mapEntryFullPath);
 
                 if (mapCache == null)
                 {
@@ -52,11 +54,11 @@ namespace OpenSage.Data.Map
                 }
                 else
                 {
-                    var timestamp = DateTime.FromFileTime((((long)mapCache.TimestampHi) << 32) | (uint)mapCache.TimestampLo);
+                    var timestamp = DateTime.FromFileTime((((long) mapCache.TimestampHi) << 32) | (uint) mapCache.TimestampLo);
 
                     // TODO: Should we check the CRC here as well?
                     // If yes, which implementation should we use?
-                    if (fileInfo.LastWriteTime != timestamp &&
+                    if (fileInfo.LastWriteTime != timestamp ||
                         fileInfo.Length != mapCache.FileSize)
                     {
                         // existing map modified
@@ -69,7 +71,7 @@ namespace OpenSage.Data.Map
                     mapCache = BuildMapCache(mapEntry, fileInfo, assetStore);
                 }
 
-                mapCacheEntries.Add(mapEntry.FullFilePath, mapCache);
+                mapCacheEntries.Add(mapEntryFullPath, mapCache);
             }
 
             // Get rid of the old MapCaches, generate the file based on
@@ -90,23 +92,19 @@ namespace OpenSage.Data.Map
             mapCacheIniEntry = new FileSystemEntry(
                 _contentManager.UserDataFileSystem,
                 MapCacheIniPath,
-                (uint)new FileInfo(fullMapCacheIniPath).Length,
+                (uint) new FileInfo(fullMapCacheIniPath).Length,
                 () => File.OpenRead(fullMapCacheIniPath));
 
-            _contentManager.UserDataFileSystem.Update(mapCacheIniEntry);
+            //_contentManager.UserDataFileSystem.Update(mapCacheIniEntry);
             _contentManager.LoadIniFile(mapCacheIniEntry);
         }
 
         private IEnumerable<FileSystemEntry> EnumerateMaps()
         {
-            var maps = from file in _contentManager.UserDataFileSystem.Files
-                       where Path.GetExtension(file.FilePath) == ".map"
-                       let parts = file.FilePath.Split(Path.DirectorySeparatorChar)
-                       where parts.Length == 3
-                           && parts[0] == "maps"
-                           && parts[1] == Path.GetFileNameWithoutExtension(parts[2])
-                       select file;
-            return maps;
+            return _contentManager.UserDataFileSystem.GetFilesInDirectory(
+                "Maps",
+                "*.map",
+                SearchOption.AllDirectories);
         }
 
         private MapCache BuildMapCache(FileSystemEntry fileSystemEntry, FileInfo fileInfo, AssetStore assetStore)
@@ -181,6 +179,12 @@ namespace OpenSage.Data.Map
                     {
                         // check "normal" objects
                         var definition = assetStore.ObjectDefinitions.GetByName(mapObject.TypeName);
+                        if (definition is null)
+                        {
+                            Logger.Warn($"Skipped null definition for object {mapObject.TypeName}");
+                            continue;
+                        }
+
                         if (definition.KindOf.Get(ObjectKinds.SupplySourceOnPreview))
                         {
                             mapCache.SupplyPositions.Add(mapObject.Position);

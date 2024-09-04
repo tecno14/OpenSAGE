@@ -3,6 +3,18 @@ using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
+    public abstract class CrateCollide : CollideModule
+    {
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
+    }
+
     public abstract class CrateCollideModuleData : CollideModuleData
     {
         internal static readonly IniParseTable<CrateCollideModuleData> FieldParseTable = new IniParseTable<CrateCollideModuleData>

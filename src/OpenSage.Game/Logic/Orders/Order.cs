@@ -2,6 +2,7 @@
 using System.Linq;
 using System.Numerics;
 using System.Text;
+using OpenSage.Logic.Object;
 using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Orders
@@ -146,7 +147,7 @@ namespace OpenSage.Logic.Orders
                     order.AddObjectIdArgument(objId);
                 }
             }
-            else
+            else if (objectIds.Count > 0)
             {
                 order.AddObjectIdArgument(objectIds.ElementAt(0));
                 order.AddPositionArgument(targetPosition);
@@ -162,6 +163,15 @@ namespace OpenSage.Logic.Orders
             order.AddIntegerArgument(objectDefinitionId);
             order.AddPositionArgument(position);
             order.AddFloatArgument(angle);
+
+            return order;
+        }
+
+        public static Order CreateResumeBuild(int playerId, uint objectId)
+        {
+            var order = new Order(playerId, OrderType.ResumeBuild);
+
+            order.AddObjectIdArgument(objectId);
 
             return order;
         }
@@ -184,26 +194,77 @@ namespace OpenSage.Logic.Orders
             return order;
         }
 
-        public static Order CreateSpecialPowerAtObject(int playerId, int specialPowerId)
+        public static Order CreateSpecialPower(int playerId, int specialPowerId, SpecialPowerOrderFlags orderFlags, uint commandCenterId)
         {
-            var order = new Order(playerId, OrderType.SpecialPowerAtObject);
+            var order = new Order(playerId, OrderType.SpecialPower);
 
-            //TODO: figure out arguments
+            order.AddIntegerArgument(specialPowerId);
+            order.AddIntegerArgument((int)orderFlags);
+            order.AddObjectIdArgument(commandCenterId);
 
             return order;
         }
 
-        public static Order CreateSpecialPowerAtLocation(int playerId, int specialPowerId, in Vector3 position)
+        public static Order CreateSpecialPowerAtObject(int playerId, int specialPowerId, uint targetId, SpecialPowerOrderFlags orderFlags, uint commandCenterId)
+        {
+            var order = new Order(playerId, OrderType.SpecialPowerAtObject);
+
+            order.AddIntegerArgument(specialPowerId);
+            order.AddObjectIdArgument(targetId);
+            order.AddIntegerArgument((int)orderFlags);
+            order.AddObjectIdArgument(commandCenterId);
+
+            return order;
+        }
+
+        public static Order CreateSpecialPowerAtLocation(int playerId, int specialPowerId, in Vector3 position, SpecialPowerOrderFlags orderFlags, uint commandCenterId)
         {
             var order = new Order(playerId, OrderType.SpecialPowerAtLocation);
 
             order.AddIntegerArgument(specialPowerId);
             order.AddPositionArgument(position);
+            order.AddObjectIdArgument(0); // todo: unknown
+            order.AddIntegerArgument((int)orderFlags);
+            order.AddObjectIdArgument(commandCenterId);
 
-            // Figure those out
+            return order;
+        }
+
+        public static Order CreateEnter(int playerId, uint objectId)
+        {
+            var order = new Order(playerId, OrderType.Enter);
+
+            // TODO: Figure this out.
             order.AddObjectIdArgument(0);
-            order.AddIntegerArgument(0);
-            order.AddObjectIdArgument(0);
+
+            order.AddObjectIdArgument(objectId);
+
+            return order;
+        }
+
+        public static Order CreateRepairVehicle(int playerId, uint objectId)
+        {
+            var order = new Order(playerId, OrderType.RepairVehicle);
+
+            order.AddObjectIdArgument(objectId);
+
+            return order;
+        }
+
+        public static Order CreateRepairStructure(int playerId, uint objectId)
+        {
+            var order = new Order(playerId, OrderType.RepairStructure);
+
+            order.AddObjectIdArgument(objectId);
+
+            return order;
+        }
+
+        public static Order CreateSupplyGatherDump(int playerId, uint objectId)
+        {
+            var order = new Order(playerId, OrderType.GatherDumpSupplies);
+
+            order.AddObjectIdArgument(objectId);
 
             return order;
         }

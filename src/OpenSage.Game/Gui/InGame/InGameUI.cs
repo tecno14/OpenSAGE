@@ -6,11 +6,10 @@ using OpenSage.Data.Ini;
 using OpenSage.Graphics;
 using OpenSage.Gui.ControlBar;
 using OpenSage.Mathematics;
-using Veldrid;
 
 namespace OpenSage.Gui.InGame
 {
-    public sealed class InGameUI : BaseSingletonAsset
+    public sealed class InGameUI : BaseSingletonAsset, IPersistableObject
     {
         internal static void Parse(IniParser parser, InGameUI value) => parser.ParseBlockContent(value, FieldParseTable);
 
@@ -180,6 +179,14 @@ namespace OpenSage.Gui.InGame
 
             { "RadiusCursorTemplate", (parser, x) => x.AddRadiusCursor(RadiusCursor.Parse(parser)) }
         };
+
+        private uint _unknown1;
+        private bool _unknown2;
+        private bool _unknown3;
+        private bool _unknown4;
+        private uint _unknown5;
+        private readonly List<SuperweaponTimer> _superweaponTimers = new();
+        public IReadOnlyList<SuperweaponTimer> SuperweaponTimers => _superweaponTimers;
 
         private void AddRadiusCursor(RadiusCursor radiusCursor)
         {
@@ -356,6 +363,114 @@ namespace OpenSage.Gui.InGame
 
         [AddedIn(SageGame.Bfme2)]
         public string RadiusCursorUseWeaponScatterRadius { get; private set; }
+
+        public void AddSuperweaponTimer(string specialPowerName, uint objectId, uint secondsUntilReady)
+        {
+            _superweaponTimers.Add(new SuperweaponTimer
+            {
+                SpecialPowerName1 = specialPowerName,
+                SpecialPowerName2 = specialPowerName,
+                ObjectId = objectId,
+                SecondsUntilReady = secondsUntilReady,
+            });
+        }
+
+        public void RemoveSuperweaponTimer(int index)
+        {
+            _superweaponTimers.RemoveAt(index);
+        }
+
+        public void Persist(StatePersister reader)
+        {
+            var version = reader.PersistVersion(3);
+
+            reader.PersistUInt32(ref _unknown1); // 0
+            reader.PersistBoolean(ref _unknown2);
+            reader.PersistBoolean(ref _unknown3);
+            reader.PersistBoolean(ref _unknown4);
+            reader.PersistUInt32(ref _unknown5); // 0
+
+            // TODO: Superweapon something...
+            reader.BeginArray(nameof(_superweaponTimers));
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                while (true)
+                {
+                    reader.BeginObject();
+
+                    var something = 0u;
+                    reader.PersistUInt32(ref something);
+
+                    // A way to store things the engine doesn't know the length of?
+                    if (something == uint.MaxValue)
+                    {
+                        break;
+                    }
+
+                    var item = new SuperweaponTimer();
+                    item.Persist(reader, version);
+                    _superweaponTimers.Add(item);
+
+                    reader.EndObject();
+                }
+            }
+            else
+            {
+                for (var i = 0u; i < _superweaponTimers.Count; i++)
+                {
+                    reader.BeginObject();
+
+                    reader.PersistUInt32(ref i, "Something");
+
+                    var item = _superweaponTimers[(int)i];
+                    item.Persist(reader, version);
+
+                    reader.EndObject();
+                }
+
+                reader.BeginObject();
+
+                var somethingEnd = uint.MaxValue;
+                reader.PersistUInt32(ref somethingEnd, "Something");
+
+                reader.EndObject();
+            }
+            reader.EndArray();
+        }
+    }
+
+    public struct SuperweaponTimer
+    {
+        public string SpecialPowerName1;
+        public string SpecialPowerName2;
+        public uint ObjectId;
+        public uint SecondsUntilReady; // yes, this is _actually_ seconds, not frames
+        public bool UnknownBool1;
+        public bool CountdownPausedMaybe;
+        public bool Ready;
+        public bool UnknownBool2;
+
+        public void Persist(StatePersister reader, byte version)
+        {
+            reader.PersistAsciiString(ref SpecialPowerName1);
+            reader.PersistAsciiString(ref SpecialPowerName2);
+
+            if (SpecialPowerName1 != SpecialPowerName2)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistObjectID(ref ObjectId);
+            reader.PersistUInt32(ref SecondsUntilReady); // 0xFFFFFFFF if it "can't" be ready?
+            reader.PersistBoolean(ref UnknownBool1);
+            reader.PersistBoolean(ref CountdownPausedMaybe); // true for napalm strike?
+            reader.PersistBoolean(ref Ready);
+
+            if (version >= 3)
+            {
+                reader.PersistBoolean(ref UnknownBool2);
+            }
+        }
     }
 
     public sealed class RadiusCursor

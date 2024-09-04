@@ -8,7 +8,6 @@ namespace OpenSage.FileFormats.Big
         private readonly BigArchiveEntry _entry;
         private readonly BigArchive _archive;
         private readonly uint _offset;
-        private bool _locked;
         private bool _write;
 
         public BigArchiveEntryStream(BigArchiveEntry entry, uint offset)
@@ -17,9 +16,6 @@ namespace OpenSage.FileFormats.Big
             _entry = entry;
             _archive = entry.Archive;
             _offset = offset;
-
-            _archive.AcquireLock();
-            _locked = true;
         }
 
         public override void Flush()
@@ -33,6 +29,7 @@ namespace OpenSage.FileFormats.Big
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            _archive.AcquireLock();
             int result = 0;
             if (_write == false)
             {
@@ -47,9 +44,10 @@ namespace OpenSage.FileFormats.Big
             }
             else
             {
-                result = _entry.OutstandingWriteStream.Read(buffer, offset, count);
+                result = _entry.OutstandingWriteStream!.Read(buffer, offset, count); // set when _write is set to true
                 Position += result;
             }
+            _archive.ReleaseLock();
 
             return result;
         }
@@ -92,7 +90,7 @@ namespace OpenSage.FileFormats.Big
             EnsureWriteMode();
 
             _entry.OnDisk = false;
-            _entry.OutstandingWriteStream.SetLength(value);
+            _entry.OutstandingWriteStream?.SetLength(value); // set in EnsureWriteMode()
         }
 
         public override void Write(byte[] buffer, int offset, int count)
@@ -100,7 +98,7 @@ namespace OpenSage.FileFormats.Big
             EnsureWriteMode();
 
             _entry.OnDisk = false;
-            _entry.OutstandingWriteStream.Position = Position;
+            _entry.OutstandingWriteStream!.Position = Position; // set in EnsureWriteMode()
             _entry.OutstandingWriteStream.Write(buffer, offset, count);
         }
 
@@ -110,19 +108,12 @@ namespace OpenSage.FileFormats.Big
 
         public override bool CanWrite => true;
 
-        public override long Length => _write ? _entry.OutstandingWriteStream.Length : _entry.Length;
+        public override long Length => _write ? _entry.OutstandingWriteStream!.Length : _entry.Length; // set when _write is set to true
 
         public override long Position { get; set; }
 
         public override void Close()
         {
-            if (_locked)
-            {
-                _archive.ReleaseLock();
-                _locked = false;
-                _entry.CurrentlyOpenForWrite = false;
-            }
-
             Flush();
             base.Close();
         }

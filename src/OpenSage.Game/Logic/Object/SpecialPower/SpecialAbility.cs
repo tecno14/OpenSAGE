@@ -1,6 +1,4 @@
-﻿using System.IO;
-using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+﻿using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
@@ -8,15 +6,17 @@ namespace OpenSage.Logic.Object
     {
         // TODO
 
-        internal override void Load(BinaryReader reader)
+        internal SpecialAbilityModule(GameObject gameObject, GameContext context, SpecialAbilityModuleData moduleData) : base(gameObject, context, moduleData)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+        }
 
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 
@@ -27,9 +27,9 @@ namespace OpenSage.Logic.Object
         private static new readonly IniParseTable<SpecialAbilityModuleData> FieldParseTable = SpecialPowerModuleData.FieldParseTable
             .Concat(new IniParseTable<SpecialAbilityModuleData>());
 
-        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        internal override SpecialAbilityModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new SpecialAbilityModule();
+            return new SpecialAbilityModule(gameObject, context, this);
         }
     }
 }

@@ -1,28 +1,38 @@
-﻿using OpenSage.Data.Ini;
+﻿using System.Collections.Generic;
+using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
     [AddedIn(SageGame.Bfme)]
-    public class GeometryUpgrade : UpgradeModule
+    internal class GeometryUpgrade : UpgradeModule
     {
         private readonly GeometryUpgradeModuleData _moduleData;
 
-        internal GeometryUpgrade(GameObject gameObject, GeometryUpgradeModuleData moduleData) : base(gameObject, moduleData)
+        internal GeometryUpgrade(GameObject gameObject, GeometryUpgradeModuleData moduleData)
+            : base(gameObject, moduleData)
         {
             _moduleData = moduleData;
         }
 
-        internal override void OnTrigger(BehaviorUpdateContext context, bool triggered)
+        protected override void OnUpgrade()
         {
-            // TODO:
-            //foreach (var showGeometry in _moduleData.ShowGeometry)
-            //{
+            if (_moduleData.ShowGeometry != null)
+            {
+                foreach (var showGeometry in _moduleData.ShowGeometry)
+                {
+                    _gameObject.ShowCollider(showGeometry);
+                }
+            }
 
-            //}
-            //foreach (var hideGeometry in _moduleData.HideGeometry)
-            //{
+            if (_moduleData.HideGeometry != null)
+            {
+                foreach (var hideGeometry in _moduleData.HideGeometry)
+                {
+                    _gameObject.HideCollider(hideGeometry);
+                }
+            }
 
-            //}
+            //TODO: WallBoundsMesh, RampMesh1, RampMesh2
         }
     }
 
@@ -43,9 +53,9 @@ namespace OpenSage.Logic.Object
 
         public string[] ShowGeometry { get; private set; }
         public string[] HideGeometry { get; private set; }
-        public string WallBoundsMesh { get; private set; }
-        public string RampMesh1 { get; private set; }
-        public string RampMesh2 { get; private set; }
+        public string WallBoundsMesh { get; private set; } // e.g. P4 where is that defined?
+        public string RampMesh1 { get; private set; } // e.g. P2 where is that defined?
+        public string RampMesh2 { get; private set; } // e.g. P3 where is that defined?
 
         internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {

@@ -11,6 +11,6 @@
         Cnc3KanesWrath,
         Ra3,
         Ra3Uprising,
-        Cnc4
+        Cnc4,
     }
 }

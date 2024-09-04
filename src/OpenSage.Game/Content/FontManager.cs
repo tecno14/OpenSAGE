@@ -4,8 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using OpenSage.Data;
 using OpenSage.Gui;
+using OpenSage.IO;
 using SixLabors.Fonts;
 
 namespace OpenSage.Content
@@ -29,14 +29,15 @@ namespace OpenSage.Content
 
             // For the json file, I think it's better to leave it on the disk
             // (instead of embedding it) so users can edit it
-            using var assemblyFileSystem = new FileSystem(Path.GetDirectoryName(assembly.Location));
-            using var fileSystem = new FileSystem(Environment.CurrentDirectory, assemblyFileSystem);
+            using var fileSystem = new CompositeFileSystem(
+                new DiskFileSystem(Environment.CurrentDirectory),
+                new DiskFileSystem(Path.GetDirectoryName(assembly.Location)));
 
             var fontFallbackSettingsJson = "{}";
             var fontFallbackSettingsEntry = fileSystem.GetFile("Content/Fonts/FontFallbackSettings.json");
             if (fontFallbackSettingsEntry != null || true)
             {
-                Logger.Info($"FontFallback Settings loaded from {fontFallbackSettingsEntry.FullFilePath}");
+                Logger.Info($"FontFallback Settings loaded from {fontFallbackSettingsEntry.FilePath}");
                 using var stream = fontFallbackSettingsEntry.Open();
                 using var reader = new StreamReader(stream, Encoding.UTF8);
                 fontFallbackSettingsJson = reader.ReadToEnd();
@@ -50,9 +51,14 @@ namespace OpenSage.Content
 
 
             var fontStream = assembly.GetManifestResourceStream($"OpenSage.Content.Fonts.{FallbackEmbeddedFont}-Regular.ttf");
-            _fallbackFonts.Install(fontStream);
+            _fallbackFonts.Add(fontStream);
             fontStream = assembly.GetManifestResourceStream($"OpenSage.Content.Fonts.{FallbackEmbeddedFont}-Bold.ttf");
-            _fallbackFonts.Install(fontStream);
+            _fallbackFonts.Add(fontStream);
+        }
+
+        public Font GetOrCreateFont(float fontSize, FontWeight fontWeight)
+        {
+            return GetOrCreateFont(FallbackEmbeddedFont, fontSize, fontWeight);
         }
 
         public Font GetOrCreateFont(string fontName, float fontSize, FontWeight fontWeight)
@@ -64,7 +70,7 @@ namespace OpenSage.Content
                 var alternatives = _fontFallbackSettings.GetFallbackList(fontName);
                 var fontNameFound = alternatives
                     .Prepend(fontName)
-                    .FirstOrDefault(name => SystemFonts.TryFind(name, out _));
+                    .FirstOrDefault(name => SystemFonts.TryGet(name, out _));
                 if (fontNameFound != fontName)
                 {
                     Logger.Info($"Requesting font {fontName}, actually found {fontNameFound}");
@@ -81,7 +87,7 @@ namespace OpenSage.Content
                 else
                 {
                     Logger.Info($"Will use embedded font as fallback for font {fontName}");
-                    font = _fallbackFonts.CreateFont(FallbackEmbeddedFont, fontSize, fontStyle);
+                    font = _fallbackFonts.Get(FallbackEmbeddedFont).CreateFont(fontSize, fontStyle);
                 }
                 _cachedFonts.Add(key, font);
             }

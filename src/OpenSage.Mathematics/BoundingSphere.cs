@@ -53,8 +53,7 @@ namespace OpenSage.Mathematics
 
         public PlaneIntersectionType Intersects(in Plane plane)
         {
-            var distance = Vector3.Dot(plane.Normal, Center);
-            distance += plane.D;
+            var distance = Vector3.Dot(plane.Normal, Center) + plane.D;
             if (distance > Radius)
             {
                 return PlaneIntersectionType.Front;
@@ -64,5 +63,32 @@ namespace OpenSage.Mathematics
 
         public bool Intersects(RectangleF bounds) => bounds.Intersects(Center.Vector2XY(), Radius);
         public bool Intersects(TransformedRectangle bounds) => bounds.Intersects(Center.Vector2XY(), Radius);
+
+        public bool Intersects(in AxisAlignedBoundingBox box)
+        {
+            // See https://developer.mozilla.org/en-US/docs/Games/Techniques/3D_collision_detection
+            var x = MathF.Max(box.Min.X, MathF.Min(Center.X, box.Max.X));
+            var y = MathF.Max(box.Min.Y, MathF.Min(Center.Y, box.Max.Y));
+            var z = MathF.Max(box.Min.Z, MathF.Min(Center.Z, box.Max.Z));
+
+            return Contains(x, y, z);
+        }
+
+        public bool Intersects(in BoundingBox box) => box.Intersects(this);
+
+        public bool Contains(float x, float y, float z)
+        {
+            var distance = MathF.Sqrt((x - Center.X) * (x - Center.X) +
+                                     (y - Center.Y) * (y - Center.Y) +
+                                     (z - Center.Z) * (z - Center.Z));
+
+            return distance <= Radius;
+        }
+
+        public bool Contains(Vector2 point)
+        {
+            var distance = (Center.Vector2XY() - point).Length();
+            return distance <= Radius;
+        }
     }
 }

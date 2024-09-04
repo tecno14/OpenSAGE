@@ -1,19 +1,21 @@
 ﻿using System.Numerics;
-using OpenSage.Mathematics.FixedMath;
+using FixedMath.NET;
 
 namespace OpenSage.Logic.Object
 {
     internal sealed class WeaponTarget
     {
+        private readonly IGameObjectCollection _gameObjects;
+
         public readonly WeaponTargetType TargetType;
         public readonly Vector3? TargetGroundPosition;
-        public readonly GameObject TargetObject;
+        public readonly uint TargetObjectId;
 
-        public bool IsDestroyed => TargetType == WeaponTargetType.Object && TargetObject.Destroyed;
+        public bool IsDestroyed => TargetType == WeaponTargetType.Object && GetTargetObject() == null;
 
         public Vector3 TargetPosition => TargetType == WeaponTargetType.Position
             ? TargetGroundPosition.Value
-            : TargetObject.Translation;
+            : GetTargetObject().Translation;
 
         internal WeaponTarget(in Vector3 targetGroundPosition)
         {
@@ -21,17 +23,21 @@ namespace OpenSage.Logic.Object
             TargetGroundPosition = targetGroundPosition;
         }
 
-        internal WeaponTarget(GameObject targetObject)
+        internal WeaponTarget(IGameObjectCollection gameObjects, uint targetObjectId)
         {
+            _gameObjects = gameObjects;
+
             TargetType = WeaponTargetType.Object;
-            TargetObject = targetObject;
+            TargetObjectId = targetObjectId;
         }
 
-        public void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, TimeInterval time)
+        public GameObject GetTargetObject() => _gameObjects.GetObjectById(TargetObjectId);
+
+        public void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, GameObject damageDealer)
         {
             if (TargetType == WeaponTargetType.Object)
             {
-                TargetObject.Body.DoDamage(damageType, amount, deathType, time);
+                GetTargetObject().DoDamage(damageType, amount, deathType, damageDealer);
             }
         }
     }

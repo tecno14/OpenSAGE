@@ -10,6 +10,7 @@ namespace OpenSage.Data.Ini
     partial class IniParser
     {
         private static readonly Dictionary<Type, Dictionary<string, Enum>> CachedEnumMap = new Dictionary<Type, Dictionary<string, Enum>>();
+        private static readonly Dictionary<Type, Dictionary<Enum, string>> CachedEnumMapReverse = new Dictionary<Type, Dictionary<Enum, string>>();
 
         static IniParser()
         {
@@ -128,6 +129,31 @@ namespace OpenSage.Data.Ini
             return stringToValueMap;
         }
 
+        public static Dictionary<Enum, string> GetEnumMapReverse<T>()
+            where T : Enum
+        {
+            var enumType = typeof(T);
+            if (!CachedEnumMapReverse.TryGetValue(enumType, out var valueToStringMap))
+            {
+                lock (CachedEnumMapReverse)
+                {
+                    valueToStringMap = Enum.GetValues(enumType)
+                        .Cast<Enum>()
+                        .Distinct()
+                        .SelectMany(x => GetIniNames(enumType, x).Select(y => new { Name = y, Value = x }))
+                        .Where(x => x.Name != null)
+                        .ToDictionary(x => x.Value, x => x.Name);
+
+                    // It might have been added by another thread.
+                    if (!CachedEnumMapReverse.ContainsKey(enumType))
+                    {
+                        CachedEnumMapReverse.Add(enumType, valueToStringMap);
+                    }
+                }
+            }
+            return valueToStringMap;
+        }
+
         private T ParseEnum<T>(Dictionary<string, T> stringToValueMap)
             where T : struct
         {
@@ -160,6 +186,18 @@ namespace OpenSage.Data.Ini
             throw new IniParseException($"Invalid value for type '{typeof(T).Name}': '{token.Text}'", token.Position);
         }
 
+        public static T ParseEnum<T>(string value)
+            where T : Enum
+        {
+            var stringToValueMap = GetEnumMap<T>();
+
+            if (stringToValueMap.TryGetValue(value.ToUpperInvariant(), out var enumValue))
+            {
+                return (T) enumValue;
+            }
+            return default;
+        }
+
         public T ParseEnumFlags<T>()
             where T : Enum
         {
@@ -170,13 +208,38 @@ namespace OpenSage.Data.Ini
             IniToken? token;
             while ((token = GetNextTokenOptional()) != null)
             {
-                if (!stringToValueMap.TryGetValue(token.Value.Text.ToUpperInvariant(), out var enumValue))
+                var stringValue = token.Value.Text.ToUpperInvariant();
+                switch (stringValue)
                 {
-                    throw new IniParseException($"Invalid value for type '{typeof(T).Name}': '{token.Value.Text}'", token.Value.Position);
-                }
+                    case "NONE":
+                        result = (T)(object)0;
+                        break;
 
-                // Ugh.
-                result = (T) (object) ((int) (object) result | (int) (object) enumValue);
+                    default:
+                        var value = true;
+
+                        if (stringValue.StartsWith("-") || stringValue.StartsWith("+"))
+                        {
+                            value = stringValue[0] == '+';
+                            stringValue = stringValue.Substring(1);
+                        }
+                        if (!stringToValueMap.TryGetValue(stringValue, out var enumValue))
+                        {
+                            throw new IniParseException($"Invalid value for type '{typeof(T).Name}': '{stringValue}'", token.Value.Position);
+                        }
+
+                        // Ugh.
+                        if (value)
+                        {
+                            result = (T)(object)((int)(object)result | (int)(object)enumValue);
+                        }
+                        else
+                        {
+                            result = (T)(object)((int)(object)result & ~(int)(object)enumValue);
+                        }
+
+                        break;
+                }
             }
 
             return result;

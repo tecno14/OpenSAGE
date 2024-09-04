@@ -2,6 +2,7 @@
 using System.IO;
 using MoonSharp.Interpreter;
 using OpenSage.Data.Ini;
+using OpenSage.Logic.Object;
 using OpenSage.Scripting.Lua;
 
 namespace OpenSage.Scripting
@@ -34,10 +35,8 @@ namespace OpenSage.Scripting
                 if (fileEntry != null)
                 {
                     Logger.Info($"Executing file {filePath}");
-                    using (var fileStream = fileEntry.Open())
-                    {
-                        MainScript.DoStream(fileStream);
-                    }
+                    using var fileStream = fileEntry.Open();
+                    MainScript.DoStream(fileStream);
                 }
             }
             catch (Exception ex)
@@ -50,23 +49,16 @@ namespace OpenSage.Scripting
 
         public void ExecuteUserCode(string externalCode)
         {
-            try
-            {
-                Logger.Info($"Executing user code {externalCode}");
-                MainScript.DoString(externalCode);
-            }
-            catch (SyntaxErrorException exeption)
-            {
-                throw (exeption);
-            }
-            catch (ScriptRuntimeException exeption)
-            {
-                throw (exeption);
-            }
-            catch (Exception exeption)
-            {
-                throw (exeption);
-            }
+            Logger.Info($"Executing user code {externalCode}");
+            MainScript.DoString(externalCode);
+        }
+
+        private W3dModelDraw _currentDrawModule;
+        public void ExecuteDrawModuleLuaCode(W3dModelDraw drawModule, string luaCode)
+        {
+            _currentDrawModule = drawModule;
+            Logger.Info($"Executing ini code {luaCode}");
+            MainScript.DoString(luaCode);
         }
 
         public void FunctionInit()
@@ -116,6 +108,17 @@ namespace OpenSage.Scripting
             MainScript.Globals["ObjectEnterUncontrollableCowerstate"] = (Action<string, string>) ObjectEnterUncontrollableCowerstate;
             MainScript.Globals["GetRandomNumber"] = (Func<double>) GetRandomNumber;
             MainScript.Globals["GetFrame"] = (Func<int>) GetFrame;
+            MainScript.Globals["CurDrawablePrevAnimationState"] = (Func<string>) CurDrawableGetPrevAnimationState;
+            MainScript.Globals["CurDrawableAllowToContinue"] = (Action)CurDrawableAllowToContinue;
+            MainScript.Globals["CurDrawablePlaySound"] = (Action<string>) CurDrawablePlaySound;
+            MainScript.Globals["CurDrawableShowSubObject"] = (Action<string>) CurDrawableShowSubObject;
+            MainScript.Globals["CurDrawableHideSubObject"] = (Action<string>) CurDrawableHideSubObject;
+            MainScript.Globals["CurDrawableShowSubObjectPermanently"] = (Action<string>) CurDrawableShowSubObjectPermanently;
+            MainScript.Globals["CurDrawableHideSubObjectPermanently"] = (Action<string>) CurDrawableHideSubObjectPermanently;
+            MainScript.Globals["CurDrawableShowModule"] = (Action<string>) CurDrawableShowModule;
+            MainScript.Globals["CurDrawableHideModule"] = (Action<string>) CurDrawableHideModule;
+            MainScript.Globals["CurDrawableSetTransitionAnimState"] = (Action<string>) CurDrawableSetTransitionAnimState;
+            MainScript.Globals["CurDrawableModelcondition"] = (Func<string, bool>) CurDrawableModelcondition;
             //addititional custom and testing functions
             MainScript.Globals["Spawn"] = (Func<string, string>) Spawn;
             MainScript.Globals["Spawn2"] = (Func<string, float, float, float, float, string>) Spawn2;
@@ -162,27 +165,16 @@ namespace OpenSage.Scripting
             //GenericEvent (self,data) //example data: "show_rock"
         }
 
-        public int GetInt(string number)
+        public static int GetInt(string number)
         {
-            int i = 0;
-            if (!int.TryParse(number, out i))
+            if (!int.TryParse(number, out var i))
             {
                 i = -1;
             }
             return i;
         }
 
-        public bool Getstate(string state)
-        {
-            if (state.Equals("1") || state.Equals("true"))
-            {
-                return true;
-            }
-            else
-            {
-                return false;
-            }
-        }
+        public static bool Getstate(string state) => (state.Equals("1") || state.Equals("true"));
 
         public void AddGameObjectRefToGlobalsTable(Table gameObject)
         {
@@ -197,34 +189,36 @@ namespace OpenSage.Scripting
 
         public string GetLuaObjectIndex(uint ObjectID)
         {
-            return String.Concat("ObjID#", ObjectID.ToString("X8"));
+            return string.Concat("ObjID#", ObjectID.ToString("X8"));
         }
 
         public string Spawn(string objectType)  //quick spawn
         {
             if (objectType.Equals("")) { objectType = "AmericaVehicleDozer"; }
-            var spawnUnit = Game.Scene3D.GameObjects.Add(objectType, Game.Scene3D.LocalPlayer);
+            var spawnUnitDefinition = Game.AssetStore.ObjectDefinitions.GetByName(objectType);
+            var spawnUnit = Game.Scene3D.GameObjects.CreateObject(spawnUnitDefinition, Game.Scene3D.LocalPlayer);
             var localPlayerStartPosition = Game.Scene3D.Waypoints[$"Player_{1}_Start"].Position;
             localPlayerStartPosition.Z += Game.Scene3D.Terrain.HeightMap.GetHeight(localPlayerStartPosition.X, localPlayerStartPosition.Y);
             var spawnUnitPosition = localPlayerStartPosition;
             var playerTemplate = Game.Scene3D.LocalPlayer.Template;
-            var startingBuilding = Game.Scene3D.GameObjects.Add(playerTemplate.StartingBuilding.Value, Game.Scene3D.LocalPlayer);
-            spawnUnitPosition += System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitX, startingBuilding.Rotation) * startingBuilding.Definition.Geometry.MajorRadius;
+            var startingBuilding = Game.Scene3D.GameObjects.CreateObject(playerTemplate.StartingBuilding.Value, Game.Scene3D.LocalPlayer);
+            spawnUnitPosition += System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitX, startingBuilding.Rotation) * startingBuilding.Definition.Geometry.Shapes[0].MajorRadius;
             spawnUnit.SetTranslation(spawnUnitPosition);
-            return GetLuaObjectIndex(Game.Scene3D.GameObjects.GetObjectId(spawnUnit));
+            return GetLuaObjectIndex(spawnUnit.ID);
         }
 
         public string Spawn2(string objectType, float xPos, float yPos, float zPos, float rotation)
         {
             var player = Game.Scene3D.LocalPlayer;
-            var spawnUnit = Game.Scene3D.GameObjects.Add(objectType, player);
+            var spawnUnitDefinition = Game.AssetStore.ObjectDefinitions.GetByName(objectType);
+            var spawnUnit = Game.Scene3D.GameObjects.CreateObject(spawnUnitDefinition, player);
             var spawnPosition = new System.Numerics.Vector3(xPos, yPos, zPos);
             spawnPosition.Z += Game.Scene3D.Terrain.HeightMap.GetHeight(spawnPosition.X, spawnPosition.Y);
             if (zPos > spawnPosition.Z) { spawnPosition.Z = zPos; }
             var rot = System.Numerics.Quaternion.CreateFromAxisAngle(System.Numerics.Vector3.UnitZ, Mathematics.MathUtility.ToRadians(rotation));
             spawnPosition += System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitX, rot);
             spawnUnit.SetTranslation(spawnPosition);
-            return GetLuaObjectIndex(Game.Scene3D.GameObjects.GetObjectId(spawnUnit));
+            return GetLuaObjectIndex(spawnUnit.ID);
         }
 
         public string GetActionNameVariant(string action, int variant)
@@ -286,13 +280,13 @@ namespace OpenSage.Scripting
 
         public void ObjectSetModelCondition(string gameObject, string modelCondition)
         {
-            Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).CopyModelConditionFlags(IniParser.ParseEnumBitArray<Logic.Object.ModelConditionFlag>(modelCondition, IniTokenPosition.None));
+            Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Drawable.CopyModelConditionFlags(IniParser.ParseEnumBitArray<ModelConditionFlag>(modelCondition, IniTokenPosition.None));
         }
 
         public bool ObjectTestModelCondition(string gameObject, string modelCondition)
         {
-            var modelConditionBitArray = IniParser.ParseEnumBitArray<Logic.Object.ModelConditionFlag>(modelCondition, IniTokenPosition.None);
-            var modelconditionBitArrayEnum = Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).ModelConditionStates;
+            var modelConditionBitArray = IniParser.ParseEnumBitArray<ModelConditionFlag>(modelCondition, IniTokenPosition.None);
+            var modelconditionBitArrayEnum = Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Drawable.ModelConditionStates;
             foreach (var i in modelconditionBitArrayEnum)
             {
                 if (i == modelConditionBitArray)
@@ -305,8 +299,8 @@ namespace OpenSage.Scripting
 
         public void ObjectClearModelCondition(string gameObject, string modelCondition)
         {
-            var modelConditionBitArray = IniParser.ParseEnumBitArray<Logic.Object.ModelConditionFlag>(modelCondition, IniTokenPosition.None);
-            var modelconditionBitArrayEnum = Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).ModelConditionStates;
+            var modelConditionBitArray = IniParser.ParseEnumBitArray<ModelConditionFlag>(modelCondition, IniTokenPosition.None);
+            var modelconditionBitArrayEnum = Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Drawable.ModelConditionStates;
             foreach (var i in modelconditionBitArrayEnum)
             {
                 if (i == modelConditionBitArray)
@@ -337,30 +331,32 @@ namespace OpenSage.Scripting
 
         public void ObjectSetGeometryActive(string gameObject, string geometryName, string state)
         {
+            Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).ShowCollider(geometryName);
         }
 
         public void ObjectHideSubObject(string gameObject, string subObject, string state)
         {
-            //Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).DrawModules
+            Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Drawable.HideSubObject(subObject);
         }
 
         public void ObjectHideSubObjectPermanently(string gameObject, string subObject, string state)
         {
+            Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Drawable.HideSubObjectPermanently(subObject);
         }
 
         public int ObjectCountNearbyEnemies(string gameObject, string radius)
         {
-            return Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Team.Owner.Enemies.Count; //placeholder
+            return Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).TeamTemplate.Owner.Enemies.Count; //placeholder
         }
 
         public int ObjectGetHealthFraction(string gameObject)
         {
-            return (int)(Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Body?.Health ?? (Mathematics.FixedMath.Fix64) 0);
+            return (int)(Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Health);
         }
 
         public string ObjectDescription(string gameObject)  //EXAMPLE C&C3: "Object 1187 (_jIWv4) [NODAvatar, owned by player 3 (MetaIdea)]"
         {
-            var ObjectID = Game.Scene3D.GameObjects.GetObjectId(Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)));
+            var ObjectID = GetLuaObjectID(gameObject);
             var ObjectNameRef = "TODO";
             var ObjectTypeName = Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Definition.Name;
             var PlayerIndex = "TODO";
@@ -370,7 +366,7 @@ namespace OpenSage.Scripting
 
         public string ObjectTeamName(string gameObject) //EXAMPLE C&C3: "teamPlayer_2"
         {
-            return Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).Team.Name;
+            return Game.Scene3D.GameObjects.GetObjectById(GetLuaObjectID(gameObject)).TeamTemplate.Name;
         }
 
         public string ObjectPlayerSide(string gameObject) //EXAMPLE C&C3: "{0,0}ED46C05A" BFME: "Isengard""
@@ -453,6 +449,27 @@ namespace OpenSage.Scripting
         {
         }
 
+        public string CurDrawableGetPrevAnimationState() => _currentDrawModule.PreviousAnimationState?.StateName ?? "";
+
+        public void CurDrawableAllowToContinue()
+        {
+            // Equivalent of WaitForStateToFinishIfPossible ?
+        }
+
+        public void CurDrawablePlaySound(string sound) => Game.Audio.PlayAudioEvent(sound);
+        public void CurDrawableShowSubObject(string subObject) => _currentDrawModule.Drawable.ShowSubObject(subObject);
+        public void CurDrawableHideSubObject(string subObject) => _currentDrawModule.Drawable.HideSubObject(subObject);
+        public void CurDrawableShowSubObjectPermanently(string subObject) => _currentDrawModule.Drawable.ShowSubObjectPermanently(subObject);
+        public void CurDrawableHideSubObjectPermanently(string subObject) => _currentDrawModule.Drawable.HideSubObjectPermanently(subObject);
+        public void CurDrawableShowModule(string module) => _currentDrawModule.Drawable.ShowDrawModule(module);
+        public void CurDrawableHideModule(string module) => _currentDrawModule.Drawable.HideDrawModule(module);
+        public void CurDrawableSetTransitionAnimState(string state) => _currentDrawModule.SetTransitionState(state);
+        public bool CurDrawableModelcondition(string conditionString)
+        {
+            var conditionFlag = IniParser.ParseEnum<ModelConditionFlag>(conditionString);
+            return conditionFlag != 0 && _currentDrawModule.GameObject.ModelConditionFlags.Get(conditionFlag);
+        }
+
         public double GetRandomNumber()  //attention for multiplayer sync
         {
             var random = new Random();
@@ -461,7 +478,7 @@ namespace OpenSage.Scripting
 
         public int GetFrame()
         {
-            return (int) Game.CurrentFrame;
+            return (int)Game.GameLogic.CurrentFrame.Value;
         }
     }
 }

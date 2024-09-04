@@ -1,6 +1,4 @@
-﻿using System.IO;
-using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+﻿using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
@@ -11,17 +9,13 @@ namespace OpenSage.Logic.Object
         {
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
-
-            var unknown = reader.ReadBytes(33);
+            reader.EndObject();
         }
     }
 
@@ -30,12 +24,12 @@ namespace OpenSage.Logic.Object
     /// </summary>
     public sealed class TransportAIUpdateModuleData : AIUpdateModuleData
     {
-        internal static new TransportAIUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
+        internal new static TransportAIUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
 
-        private static new readonly IniParseTable<TransportAIUpdateModuleData> FieldParseTable = AIUpdateModuleData.FieldParseTable
+        private new static readonly IniParseTable<TransportAIUpdateModuleData> FieldParseTable = AIUpdateModuleData.FieldParseTable
             .Concat(new IniParseTable<TransportAIUpdateModuleData>());
 
-        internal override AIUpdate CreateAIUpdate(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
             return new TransportAIUpdate(gameObject, this);
         }

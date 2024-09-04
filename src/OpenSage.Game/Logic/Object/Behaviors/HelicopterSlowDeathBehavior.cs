@@ -3,6 +3,32 @@ using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class HelicopterSlowDeathBehavior : SlowDeathBehavior
+    {
+        internal HelicopterSlowDeathBehavior(HelicopterSlowDeathBehaviorModuleData moduleData)
+            : base(moduleData)
+        {
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            var unknown1 = true;
+            reader.PersistBoolean(ref unknown1);
+            if (!unknown1)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.SkipUnknownBytes(28);
+        }
+    }
+
     public sealed class HelicopterSlowDeathBehaviorModuleData : SlowDeathBehaviorModuleData
     {
         internal static new HelicopterSlowDeathBehaviorModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
@@ -62,5 +88,10 @@ namespace OpenSage.Logic.Object
         public string OCLFinalBlowUp { get; private set; }
         public int DelayFromGroundToFinalDeath { get; private set; }
         public string FinalRubbleObject { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new HelicopterSlowDeathBehavior(this);
+        }
     }
 }

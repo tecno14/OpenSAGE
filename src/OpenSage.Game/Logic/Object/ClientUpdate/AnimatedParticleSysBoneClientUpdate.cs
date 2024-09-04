@@ -1,7 +1,20 @@
-﻿using OpenSage.Data.Ini;
+﻿using OpenSage.Client;
+using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class AnimatedParticleSysBoneClientUpdate : ClientUpdateModule
+    {
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
+    }
+
     /// <summary>
     /// Allows the object to have particle system effects dynamically attached to animated 
     /// sub objects or bones.
@@ -11,5 +24,10 @@ namespace OpenSage.Logic.Object
         internal static AnimatedParticleSysBoneClientUpdateModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
 
         internal static readonly IniParseTable<AnimatedParticleSysBoneClientUpdateModuleData> FieldParseTable = new IniParseTable<AnimatedParticleSysBoneClientUpdateModuleData>();
+
+        internal override ClientUpdateModule CreateModule(Drawable drawable, GameContext context)
+        {
+            return new AnimatedParticleSysBoneClientUpdate();
+        }
     }
 }

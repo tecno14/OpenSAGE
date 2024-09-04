@@ -1,9 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
+using System.Numerics;
 using OpenSage.Audio;
-using OpenSage.Content;
 using OpenSage.Content.Loaders;
 using OpenSage.Content.Util;
 using OpenSage.Data.Map;
@@ -19,13 +18,13 @@ using OpenSage.Input;
 using OpenSage.Logic;
 using OpenSage.Logic.Object;
 using OpenSage.Mathematics;
+using OpenSage.Rendering;
 using OpenSage.Scripting;
 using OpenSage.Settings;
 using OpenSage.Terrain;
 using OpenSage.Terrain.Roads;
 using Veldrid;
 using Player = OpenSage.Logic.Player;
-using Team = OpenSage.Logic.Team;
 
 namespace OpenSage
 {
@@ -43,7 +42,7 @@ namespace OpenSage
         private readonly DebugMessageHandler _debugMessageHandler;
         public DebugOverlay DebugOverlay { get; private set; }
 
-        private readonly ParticleSystemManager _particleSystemManager;
+        internal readonly ParticleSystemManager ParticleSystemManager;
 
         private readonly OrderGeneratorSystem _orderGeneratorSystem;
 
@@ -53,25 +52,33 @@ namespace OpenSage
 
         public readonly MapFile MapFile;
 
-        public readonly MapCache MapCache;
-
         public readonly Terrain.Terrain Terrain;
 
-        public readonly Quadtree<GameObject> Quadtree;
-        public bool ShowTerrain { get; set; } = true;
+        public readonly IQuadtree<GameObject> Quadtree;
+        public bool ShowTerrain
+        {
+            get => RenderScene.GetRenderBucket("Terrain").Visible;
+            set => RenderScene.GetRenderBucket("Terrain").Visible = value;
+        }
 
         public readonly WaterAreaCollection WaterAreas;
         public bool ShowWater { get; set; } = true;
 
         public readonly RoadCollection Roads;
-        public bool ShowRoads { get; set; } = true;
+        public bool ShowRoads
+        {
+            get => RenderScene.GetRenderBucket("Roads").Visible;
+            set => RenderScene.GetRenderBucket("Roads").Visible = value;
+        }
 
         public readonly Bridge[] Bridges;
         public bool ShowBridges { get; set; } = true;
 
-        public ScriptList[] PlayerScripts { get; private set; }
+        public bool FrustumCulling { get; set; } = false;
 
-        public readonly GameObjectCollection GameObjects;
+        public PlayerScriptsList PlayerScripts { get; private set; }
+
+        public IGameObjectCollection GameObjects => GameContext.GameLogic;
         public bool ShowObjects { get; set; } = true;
         public readonly CameraCollection Cameras;
         public readonly WaypointCollection Waypoints;
@@ -82,18 +89,12 @@ namespace OpenSage
 
         public WaterSettings Waters { get; } = new WaterSettings();
 
-        private readonly List<Team> _teams;
-        public IReadOnlyList<Team> Teams => _teams;
-
-        // TODO: Move these to a World class?
-        // TODO: Encapsulate this into a custom collection?
-        public IReadOnlyList<Player> Players => _players;
-        private List<Player> _players;
-        public Player LocalPlayer { get; private set; }
+        public IReadOnlyList<Player> Players => Game.PlayerManager.Players;
+        public Player LocalPlayer => Game.PlayerManager.LocalPlayer;
         public readonly Navigation.Navigation Navigation;
 
-        internal readonly AudioSystem Audio;
-        internal readonly AssetLoadContext AssetLoadContext;
+        internal AudioSystem Audio => Game.Audio;
+        internal AssetLoadContext AssetLoadContext => Game.AssetStore.LoadContext;
 
         public readonly Random Random;
 
@@ -103,21 +104,30 @@ namespace OpenSage
 
         public readonly Game Game;
 
-        internal Scene3D(Game game, MapFile mapFile, string mapPath, int randomSeed)
+        public GameObject BuildPreviewObject;
+
+        public readonly RenderScene RenderScene;
+
+        private readonly Scene25D _scene25D;
+
+        public readonly RadarDrawUtil RadarDrawUtil;
+
+        internal Scene3D(
+            Game game,
+            MapFile mapFile,
+            string mapPath,
+            int randomSeed,
+            Data.Map.Player[] mapPlayers,
+            Data.Map.Team[] mapTeams,
+            ScriptList[] mapScriptLists,
+            GameType gameType)
             : this(game, () => game.Viewport, game.InputMessageBuffer, randomSeed, false, mapFile, mapPath)
         {
-            var contentManager = game.ContentManager;
+            game.Scene3D = this;
 
-            _players = Player.FromMapData(mapFile.SidesList.Players, game.AssetStore).ToList();
+            game.PlayerManager.OnNewGame(mapPlayers, gameType);
 
-            LocalPlayer = _players.First();
-
-            _teams = (mapFile.SidesList.Teams ?? mapFile.Teams.Items)
-                .Select(team => Team.FromMapData(team, _players))
-                .ToList();
-
-            Audio = game.Audio;
-            AssetLoadContext = game.AssetStore.LoadContext;
+            game.TeamFactory.Initialize(mapTeams);
 
             Lighting = new WorldLighting(
                 mapFile.GlobalLighting.LightingConfigurations.ToLightSettingsDictionary(),
@@ -128,7 +138,6 @@ namespace OpenSage
                 Terrain.HeightMap,
                 mapFile.ObjectsList.Objects,
                 MapFile.NamedCameras,
-                _teams,
                 out var waypoints,
                 out var roads,
                 out var bridges,
@@ -139,9 +148,10 @@ namespace OpenSage
             Waypoints = waypoints;
             Cameras = cameras;
 
-            PlayerScripts = mapFile
-                .GetPlayerScriptsList()
-                .ScriptLists;
+            PlayerScripts = new PlayerScriptsList
+            {
+                ScriptLists = mapScriptLists
+            };
 
             CameraController = new RtsCameraController(game.AssetStore.GameData.Current, Camera, Terrain.HeightMap)
             {
@@ -150,7 +160,9 @@ namespace OpenSage
                     Terrain.HeightMap.Height / 2)
             };
 
-            contentManager.GraphicsDevice.WaitForIdle();
+            game.ContentManager.GraphicsDevice.WaitForIdle();
+
+            _scene25D = game.Definition.CreateScene25D(this, AssetLoadContext.AssetStore);
         }
 
         private void LoadObjects(
@@ -158,7 +170,6 @@ namespace OpenSage
             HeightMap heightMap,
             MapObject[] mapObjects,
             NamedCameras namedCameras,
-            List<Team> teams,
             out WaypointCollection waypointCollection,
             out RoadCollection roads,
             out Bridge[] bridges,
@@ -184,7 +195,7 @@ namespace OpenSage
                                 break;
 
                             default:
-                                GameObject.FromMapObject(mapObject, loadContext.AssetStore, GameObjects, heightMap, overwriteAngle: null, teams: teams);
+                                GameObject.FromMapObject(mapObject, GameContext, overwriteAngle: null);
                                 break;
                         }
                         break;
@@ -201,12 +212,10 @@ namespace OpenSage
                         var bridgeEnd = mapObjects[++i];
 
                         bridgesList.Add(AddDisposable(new Bridge(
-                            loadContext,
-                            heightMap,
+                            GameContext,
                             mapObject,
                             mapObject.Position,
-                            bridgeEnd.Position,
-                            GameObjects)));
+                            bridgeEnd.Position)));
 
                         break;
 
@@ -247,7 +256,7 @@ namespace OpenSage
             }
 
             cameras = new CameraCollection(namedCameras?.Cameras);
-            roads = AddDisposable(new RoadCollection(roadTopology, loadContext, heightMap, Terrain.RadiusCursorDecalsResourceSet));
+            roads = AddDisposable(new RoadCollection(roadTopology, loadContext, heightMap, RenderScene));
             waypointCollection = new WaypointCollection(waypoints, MapFile.WaypointsList.WaypointPaths);
             bridges = bridgesList.ToArray();
         }
@@ -262,12 +271,6 @@ namespace OpenSage
             bool isDiagnosticScene = false)
             : this(game, getViewport, inputMessageBuffer, randomSeed, isDiagnosticScene, null, null)
         {
-            _players = new List<Player>();
-            _teams = new List<Team>();
-
-            // TODO: This is completely wrong.
-            LocalPlayer = _players.FirstOrDefault();
-
             WaterAreas = AddDisposable(new WaterAreaCollection());
             Lighting = lighting;
 
@@ -291,26 +294,14 @@ namespace OpenSage
 
             Random = new Random(randomSeed);
 
+            RenderScene = new RenderScene();
+
             if (mapFile != null)
             {
                 MapFile = mapFile;
-                Terrain = AddDisposable(new Terrain.Terrain(mapFile, game.AssetStore.LoadContext));
+                Terrain = AddDisposable(new Terrain.Terrain(mapFile, game.TerrainLogic.HeightMap, game.AssetStore.LoadContext, RenderScene));
                 WaterAreas = AddDisposable(new WaterAreaCollection(mapFile.PolygonTriggers, mapFile.StandingWaterAreas, mapFile.StandingWaveAreas, game.AssetStore.LoadContext));
                 Navigation = new Navigation.Navigation(mapFile.BlendTileData, Terrain.HeightMap);
-            }
-
-            if (mapPath != null)
-            {
-                var mapCache = game.AssetStore.MapCaches.GetByName(mapPath.ToLower());
-                if (mapCache == null)
-                {
-                    mapCache = game.AssetStore.MapCaches.GetByName(Path.Combine(game.UserDataFolder, mapPath).ToLower());
-                }
-                if (mapCache == null)
-                {
-                    throw new Exception($"Failed to load MapCache \"{mapPath}\"");
-                }
-                MapCache = mapCache;
             }
 
             RegisterInputHandler(_cameraInputMessageHandler = new CameraInputMessageHandler(), inputMessageBuffer);
@@ -322,9 +313,9 @@ namespace OpenSage
                 RegisterInputHandler(_debugMessageHandler = new DebugMessageHandler(DebugOverlay), inputMessageBuffer);
             }
 
-            _particleSystemManager = AddDisposable(new ParticleSystemManager(game.AssetStore.LoadContext));
+            ParticleSystemManager = AddDisposable(new ParticleSystemManager(this, game.AssetStore.LoadContext));
 
-            Radar = new Radar(this, game.AssetStore, MapCache);
+            Radar = new Radar();
 
             if (mapFile != null)
             {
@@ -337,21 +328,19 @@ namespace OpenSage
             GameContext = new GameContext(
                 game.AssetStore.LoadContext,
                 game.Audio,
-                _particleSystemManager,
+                ParticleSystemManager,
                 new ObjectCreationListManager(),
                 Terrain,
                 Navigation,
                 Radar,
                 Quadtree,
-                this);
+                this,
+                game);
 
-            GameObjects = AddDisposable(
-                new GameObjectCollection(
-                    GameContext,
-                    game.CivilianPlayer,
-                    Navigation));
+            RadarDrawUtil = new RadarDrawUtil(Radar, Terrain?.HeightMap, GameObjects, Camera, AssetLoadContext.AssetStore, mapPath);
 
-            GameContext.GameObjects = GameObjects;
+            Game.GameLogic.Reset();
+            Game.GameClient.Reset();
 
             _orderGeneratorSystem = game.OrderGenerator;
         }
@@ -362,66 +351,26 @@ namespace OpenSage
             AddDisposeAction(() => inputMessageBuffer.Handlers.Remove(handler));
         }
 
-        public void SetSkirmishPlayers(IEnumerable<Player> players, Player localPlayer)
-        {
-            _players = players.ToList();
-
-            if (!_players.Contains(localPlayer))
-            {
-                throw new ArgumentException(
-                    $"Argument {nameof(localPlayer)} should be included in {nameof(players)}",
-                    nameof(localPlayer));
-            }
-
-            LocalPlayer = localPlayer;
-
-            if (LocalPlayer.SelectedUnits.Count > 0)
-            {
-                var mainUnit = LocalPlayer.SelectedUnits.First();
-                CameraController.GoToObject(mainUnit);
-            }
-
-            // TODO: What to do with teams?
-            // Teams refer to old Players and therefore they will not be collected by GC
-            // (+ objects will have invalid owners)
-        }
-
         // TODO: Move this over to a player collection?
-        public int GetPlayerIndex(Player player)
-        {
-            return _players.IndexOf(player);
-        }
+        public int GetPlayerIndex(Player player) => Game.PlayerManager.GetPlayerIndex(player);
 
-        internal void LogicTick(ulong frame, in TimeInterval time)
+        internal void LogicTick(in TimeInterval time)
         {
-            foreach (var gameObject in GameObjects.Items)
+            Game.PlayerManager.LogicTick();
+
+            foreach (var gameObject in GameObjects.Objects)
             {
-                gameObject.LogicTick(frame, time);
+                gameObject.LogicTick(time);
             }
 
-            DetectCollisions(time);
-        }
-
-        private void DetectCollisions(in TimeInterval time)
-        {
-            var items = GameObjects.Items;
-            foreach (var current in items)
-            {
-                var intersecting = Quadtree.FindIntersecting(current.Collider);
-
-                foreach (var intersect in intersecting)
-                {
-                    current.DoCollide(intersect, time);
-                    intersect.DoCollide(current, time);
-                }
-            }
+            GameObjects.DeleteDestroyed();
         }
 
         internal void LocalLogicTick(in TimeInterval gameTime, float tickT)
         {
             _orderGeneratorInputHandler?.Update();
 
-            foreach (var gameObject in GameObjects.Items)
+            foreach (var gameObject in GameObjects.Objects)
             {
                 gameObject.LocalLogicTick(gameTime, tickT, Terrain?.HeightMap);
             }
@@ -437,23 +386,15 @@ namespace OpenSage
             }
 
             Terrain?.Update(Waters, gameTime);
+
+            ParticleSystemManager?.Update(gameTime);
         }
 
         internal void BuildRenderList(RenderList renderList, Camera camera, in TimeInterval gameTime)
         {
-            if (ShowTerrain)
-            {
-                Terrain?.BuildRenderList(renderList);
-            }
-
             if (ShowWater)
             {
                 WaterAreas.BuildRenderList(renderList);
-            }
-
-            if (ShowRoads)
-            {
-                Roads.BuildRenderList(renderList);
             }
 
             if (ShowBridges)
@@ -466,13 +407,16 @@ namespace OpenSage
 
             if (ShowObjects)
             {
-                foreach (var gameObject in GameObjects.Items)
+                foreach (var gameObject in GameObjects.Objects)
                 {
-                    gameObject.BuildRenderList(renderList, camera, gameTime);
+                    if (!FrustumCulling
+                        || gameObject.Definition.KindOf.Get(ObjectKinds.NoCollide)
+                        || gameObject.RoughCollider.Intersects(Camera.BoundingFrustum))
+                    {
+                        gameObject.BuildRenderList(renderList, camera, gameTime);
+                    }
                 }
             }
-
-            _particleSystemManager.BuildRenderList(renderList);
 
             _orderGeneratorSystem.BuildRenderList(renderList, camera, gameTime);
         }
@@ -480,94 +424,55 @@ namespace OpenSage
         // This is for drawing 2D elements which depend on the Scene3D, e.g tooltips and health bars.
         internal void Render(DrawingContext2D drawingContext)
         {
-            DrawHealthBoxes(drawingContext);
+            _scene25D?.Draw(drawingContext);
 
             SelectionGui?.Draw(drawingContext);
             DebugOverlay?.Draw(drawingContext, Camera);
         }
 
-        private void DrawHealthBoxes(DrawingContext2D drawingContext)
+        internal void CreateSkirmishPlayerStartingBuilding(in PlayerSetting playerSetting, Player player)
         {
-            void DrawHealthBox(GameObject gameObject)
+            // TODO: Not sure what the OG does here.
+            var playerStartPosition = new Vector3(80, 80, 0);
+            if (Waypoints.TryGetByName($"Player_{playerSetting.StartPosition}_Start", out var startWaypoint))
             {
-                if (gameObject.Definition.Geometry is null || gameObject.Definition.KindOf.Get(ObjectKinds.Horde))
-                {
-                    return;
-                }
-
-                var geometrySize = gameObject.Definition.Geometry.MajorRadius;
-
-                // Not sure if this is what IsSmall is actually for.
-                if (gameObject.Definition.Geometry.IsSmall)
-                {
-                    geometrySize = Math.Max(geometrySize, 15);
-                }
-
-
-                var boundingSphere = new BoundingSphere(gameObject.Translation, geometrySize);
-                var healthBoxSize = Camera.GetScreenSize(boundingSphere);
-
-                var healthBoxWorldSpacePos = gameObject.Translation.WithZ(gameObject.Translation.Z + gameObject.Definition.Geometry.Height);
-                var healthBoxRect = Camera.WorldToScreenRectangle(
-                    healthBoxWorldSpacePos,
-                    new SizeF(healthBoxSize, 3));
-
-                if (healthBoxRect == null)
-                {
-                    return;
-                }
-
-                void DrawBar(in RectangleF rect, in ColorRgbaF color, float value)
-                {
-                    var actualRect = rect.WithWidth(rect.Width * value);
-                    drawingContext.FillRectangle(actualRect, color);
-
-                    var borderColor = color.WithRGB(color.R / 2.0f, color.G / 2.0f, color.B / 2.0f);
-                    drawingContext.DrawRectangle(rect, borderColor, 1);
-                }
-
-                // TODO: Not sure what to draw for InactiveBody?
-                if (gameObject.Body is ActiveBody)
-                {
-                    DrawBar(
-                        healthBoxRect.Value,
-                        new ColorRgbaF(0, 1, 0, 1),
-                        (float)gameObject.Body.HealthPercentage);
-                }
-
-                var productionBoxRect = healthBoxRect.Value.WithY(healthBoxRect.Value.Y + 4);
-
-                if (gameObject.Definition.KindOf.Get(ObjectKinds.Structure) && gameObject.BuildProgress < 0.999f)
-                {
-                    DrawBar(
-                        productionBoxRect,
-                        new ColorRgba(172, 255, 254, 255).ToColorRgbaF(),
-                        gameObject.BuildProgress);
-                }
-                else if (gameObject.ProductionUpdate != null)
-                {
-                    var productionBoxValue = gameObject.ProductionUpdate.IsProducing
-                        ? gameObject.ProductionUpdate.ProductionQueue[0].Progress
-                        : 0;
-
-                    DrawBar(
-                        productionBoxRect,
-                        new ColorRgba(172, 255, 254, 255).ToColorRgbaF(),
-                        productionBoxValue);
-                }
+                playerStartPosition = startWaypoint.Position;
             }
+            playerStartPosition.Z += Terrain.HeightMap.GetHeight(playerStartPosition.X, playerStartPosition.Y);
 
-            // The AssetViewer has no LocalPlayer
-            if (LocalPlayer != null)
+            if (player.Template.StartingBuilding != null)
             {
-                foreach (var selectedUnit in LocalPlayer.SelectedUnits)
-                {
-                    DrawHealthBox(selectedUnit);
-                }
+                var startingBuilding = GameObjects.CreateObject(player.Template.StartingBuilding.Value, player);
+                var rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathUtility.ToRadians(startingBuilding.Definition.PlacementViewAngle));
+                startingBuilding.UpdateTransform(playerStartPosition, rotation);
 
-                if (LocalPlayer.HoveredUnit != null)
+                Navigation.UpdateAreaPassability(startingBuilding, false);
+
+                var startingUnit0 = GameObjects.CreateObject(player.Template.StartingUnits[0].Unit.Value, player);
+                var startingUnit0Position = playerStartPosition;
+                startingUnit0Position += Vector3.Transform(Vector3.UnitX, startingBuilding.Rotation) * startingBuilding.Definition.Geometry.Shapes[0].MajorRadius;
+                startingUnit0.SetTranslation(startingUnit0Position);
+
+                Game.Selection.SetSelectedObjects(player, new[] { startingBuilding }, playAudio: false);
+            }
+            else
+            {
+                var castleBehaviors = new List<(CastleBehavior, TeamTemplate)>();
+                foreach (var gameObject in GameObjects.Objects)
                 {
-                    DrawHealthBox(LocalPlayer.HoveredUnit);
+                    var team = gameObject.TeamTemplate;
+                    if (team?.Name == $"Player_{playerSetting.StartPosition}_Inherit")
+                    {
+                        var castleBehavior = gameObject.FindBehavior<CastleBehavior>();
+                        if (castleBehavior != null)
+                        {
+                            castleBehaviors.Add((castleBehavior, team));
+                        }
+                    }
+                }
+                foreach (var (castleBehavior, _) in castleBehaviors)
+                {
+                    castleBehavior.Unpack(player, instant: true);
                 }
             }
         }

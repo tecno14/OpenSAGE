@@ -1,31 +1,28 @@
 ﻿using System;
-using System.IO;
-using OpenSage.FileFormats;
 
 namespace OpenSage.Data.Sav
 {
-    public sealed class GameState
+    public sealed class GameState : IPersistableObject
     {
-        public SaveGameType GameType { get; private set; }
-        public string MapPath { get; private set; }
-        public DateTime Timestamp { get; private set; }
-        public string DisplayName { get; private set; }
-        public string MapFileName { get; private set; }
-        public string Side { get; private set; }
-        public uint MissionIndex { get; private set; }
+        public SaveGameType GameType;
+        public string MapPath;
+        public DateTime Timestamp;
+        public string DisplayName;
+        public string MapFileName;
+        public string Side;
+        public uint MissionIndex;
 
-        internal static GameState Parse(BinaryReader reader)
+        public void Persist(StatePersister reader)
         {
-            return new GameState
-            {
-                GameType = reader.ReadUInt32AsEnum<SaveGameType>(),
-                MapPath = reader.ReadBytePrefixedAsciiString(),
-                Timestamp = reader.ReadDateTime(),
-                DisplayName = reader.ReadBytePrefixedUnicodeString(),
-                MapFileName = reader.ReadBytePrefixedAsciiString(),
-                Side = reader.ReadBytePrefixedAsciiString(),
-                MissionIndex = reader.ReadUInt32()
-            };
+            reader.PersistVersion(2);
+
+            reader.PersistEnum(ref GameType);
+            reader.PersistAsciiString(ref MapPath);
+            reader.PersistDateTime(ref Timestamp);
+            reader.PersistUnicodeString(ref DisplayName);
+            reader.PersistAsciiString(ref MapFileName);
+            reader.PersistAsciiString(ref Side);
+            reader.PersistUInt32(ref MissionIndex);
         }
     }
 }

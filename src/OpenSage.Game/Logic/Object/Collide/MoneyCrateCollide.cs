@@ -1,7 +1,20 @@
-﻿using OpenSage.Data.Ini;
+﻿using System.IO;
+using OpenSage.Content;
+using OpenSage.Data.Ini;
+using OpenSage.FileFormats;
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class MoneyCrateCollide : CrateCollide
+    {
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            base.Load(reader);
+        }
+    }
+
     public sealed class MoneyCrateCollideModuleData : CrateCollideModuleData
     {
         internal static MoneyCrateCollideModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
@@ -17,20 +30,22 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public BoostUpgrade UpgradedBoost { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new MoneyCrateCollide();
+        }
     }
 
-    public struct BoostUpgrade
+    public readonly record struct BoostUpgrade(LazyAssetReference<UpgradeTemplate> UpgradeType, int Boost)
     {
         internal static BoostUpgrade Parse(IniParser parser)
         {
             return new BoostUpgrade
             {
-                UpgradeType = parser.ParseAttribute("UpgradeType", () => parser.ParseAssetReference()),
-                Boost = parser.ParseAttributeInteger("Boost")
+                UpgradeType = parser.ParseAttribute("UpgradeType", parser.ParseUpgradeReference),
+                Boost = parser.ParseAttributeInteger("Boost"),
             };
         }
-
-        public string UpgradeType;
-        public int Boost;
     }
 }

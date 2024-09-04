@@ -37,10 +37,11 @@ namespace OpenSage.Diagnostics
             UpdateSearch(searchText);
             ImGui.PopItemWidth();
 
-            ImGui.BeginChild("files list", ImGui.GetContentRegionAvail(), true);
+            ImGui.BeginChild("files list", ImGui.GetContentRegionAvail(), ImGuiChildFlags.Border);
 
-            var clipperPtr = ImGuiNative.ImGuiListClipper_ImGuiListClipper(_items.Count, ImGui.GetTextLineHeightWithSpacing());
+            var clipperPtr = ImGuiNative.ImGuiListClipper_ImGuiListClipper();
             var clipper = new ImGuiListClipperPtr(clipperPtr);
+            clipper.Begin(_items.Count, ImGui.GetTextLineHeightWithSpacing());
             while (clipper.Step())
             {
                 for (var i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
@@ -75,7 +76,7 @@ namespace OpenSage.Diagnostics
 
             var isEmptySearch = string.IsNullOrWhiteSpace(_searchText);
 
-            foreach (var asset in Context.Game.Scene3D.GameObjects.Items)
+            foreach (var asset in Context.Game.Scene3D.GameObjects.Objects)
             {
                 var name = GetObjectName(asset);
                 if (isEmptySearch || name.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0)
@@ -87,7 +88,7 @@ namespace OpenSage.Diagnostics
 
         private string GetObjectName(GameObject gameObject)
         {
-            return Context.Game.Scene3D.GameObjects.GetObjectId(gameObject) + " - " + (gameObject.Name ?? gameObject.Definition.Name);
+            return gameObject.ID + " - " + (gameObject.Name ?? gameObject.Definition.Name);
         }
     }
 }

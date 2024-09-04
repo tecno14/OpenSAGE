@@ -11,15 +11,15 @@ namespace OpenSage.Mathematics
         public readonly Vector2 UpperRight;
         public readonly Vector2 LowerLeft;
         public readonly Vector2 LowerRight;
+        public readonly Vector2 Center;
 
-        public Vector2 Center => (UpperLeft + LowerRight) / 2; 
-
-        public TransformedRectangle(Vector2 upperLeft, Vector2 upperRight, Vector2 lowerLeft, Vector2 lowerRight)
+        public TransformedRectangle(Vector2 upperLeft, Vector2 upperRight, Vector2 lowerLeft, Vector2 lowerRight, Vector2? center = null)
         {
             UpperLeft = upperLeft;
             UpperRight = upperRight;
             LowerLeft = lowerLeft;
             LowerRight = lowerRight;
+            Center = center ?? (upperLeft + lowerRight) / 2.0f;
         }
 
         // Based on
@@ -82,12 +82,14 @@ namespace OpenSage.Mathematics
             var height = (UpperLeft - LowerLeft).Length();
             var rectF = new RectangleF(Vector2.Zero, width, height);
 
-            var rectAngle = Vector2Utility.Angle(LowerLeft, LowerRight);
+            var rectAngle = Vector2Utility.Angle(LowerRight, LowerLeft);
             var newCenter = center - LowerLeft;
-            newCenter = newCenter.RotateAroundPoint(LowerLeft, -rectAngle);
+            newCenter = newCenter.RotateAroundPoint(Vector2.Zero, -rectAngle);
 
             return rectF.Intersects(newCenter, radius);
         }
+
+        public bool Intersects(in RectangleF rect) => rect.Intersects(this);
 
         public bool Contains(Vector2 point)
         {
@@ -97,19 +99,19 @@ namespace OpenSage.Mathematics
 
         public static TransformedRectangle FromRectangle(in RectangleF rect, float angle = 0)
         {
-            var upperLeft = new Vector2(rect.X, rect.Y);
-            var upperRight = upperLeft + new Vector2(rect.Width, 0);
-            var lowerLeft = upperLeft + new Vector2(0, rect.Height);
-            var lowerRight = upperLeft + new Vector2(rect.Width, rect.Height);
+            var lowerLeft = new Vector2(rect.X, rect.Y);
+            var lowerRight = lowerLeft + new Vector2(rect.Width, 0);
+            var upperLeft = lowerLeft + new Vector2(0, rect.Height);
+            var upperRight = lowerLeft + new Vector2(rect.Width, rect.Height);
 
-            var center = (upperLeft + lowerRight) / 2;
+            var center = (lowerLeft + upperRight) / 2;
 
             upperLeft = upperLeft.RotateAroundPoint(center, angle);
             upperRight = upperRight.RotateAroundPoint(center, angle);
             lowerLeft = lowerLeft.RotateAroundPoint(center, angle);
             lowerRight = lowerRight.RotateAroundPoint(center, angle);
 
-            return new TransformedRectangle(upperLeft, upperRight, lowerLeft, lowerRight);
+            return new TransformedRectangle(upperLeft, upperRight, lowerLeft, lowerRight, center);
         }
     }
 }

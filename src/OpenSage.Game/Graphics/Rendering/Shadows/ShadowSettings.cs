@@ -16,7 +16,7 @@ namespace OpenSage.Graphics.Rendering.Shadows
         /// <summary>
         /// Gets or sets the type of shadows that are rendered.
         /// </summary>
-        public ShadowsType ShadowsType { get; set; } = ShadowsType.None; // TODO: Change the default to Soft.
+        public ShadowsType ShadowsType { get; set; } = ShadowsType.Soft;
 
         /// <summary>
         /// Gets or sets the size of the shadow map (in pixels).
@@ -47,7 +47,7 @@ namespace OpenSage.Graphics.Rendering.Shadows
         /// <summary>
         /// Gets or sets the furthest distance from the camera that shadows will be rendered.
         /// </summary>
-        public float ShadowDistance { get; set; } = 600.0f;
+        public float ShadowDistance { get; set; } = 1200.0f;
 
         /// <summary>
         /// Gets or sets whether to stabilize the shadow map cascades.
@@ -57,6 +57,10 @@ namespace OpenSage.Graphics.Rendering.Shadows
         public bool StabilizeShadowCascades { get; set; } = true;
 
         public bool VisualizeCascades { get; set; } = false;
+
+        public bool UpdateShadowMatrices { get; set; } = true;
+
+        public bool VisualizeShadowFrustums { get; set; } = false;
 
         /// <summary>
         /// Gets or sets the depth bias to use when rendering shadows.

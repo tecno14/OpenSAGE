@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using OpenSage.Mathematics;
 
 namespace OpenSage.Gui.Apt.ActionScript.Library
 {
@@ -45,21 +46,21 @@ namespace OpenSage.Gui.Apt.ActionScript.Library
                 ["_alpha"] = (ctx, v) =>
                 {
                     var transform = ctx.Item.Transform;
-                    ctx.Item.Transform =
-                        transform.WithColorTransform(transform.ColorTransform.WithA(v.ToInteger() / 100.0f));
+                    var color = transform.TintColorTransform.WithA(v.ToInteger() / 100.0f);
+                    ctx.Item.Transform = transform.WithColorTransform(color, add: ColorRgbaF.Transparent);
                 },
                 ["textColor"] = (ctx, v) =>
                 {
                     var hexStr = v.ToString();
                     var hexColor = Convert.ToInt32(hexStr, 16);
 
-                    float b = (hexColor & 0xFF) / 255.0f;
-                    float g = ((hexColor & 0xFF00) >> 8) / 255.0f;
-                    float r = ((hexColor & 0xFF0000) >> 16) / 255.0f;
+                    var b = (hexColor & 0xFF) / 255.0f;
+                    var g = ((hexColor & 0xFF00) >> 8) / 255.0f;
+                    var r = ((hexColor & 0xFF0000) >> 16) / 255.0f;
 
                     var transform = ctx.Item.Transform;
-                    ctx.Item.Transform =
-                        transform.WithColorTransform(transform.ColorTransform.WithRGB(r, g, b));
+                    var color = transform.TintColorTransform.WithRGB(r, g, b);
+                    ctx.Item.Transform = transform.WithColorTransform(color, add: ColorRgbaF.Transparent);
                 }
             };
 
@@ -128,8 +129,10 @@ namespace OpenSage.Gui.Apt.ActionScript.Library
             var item = ctx.Item;
 
             // Parent of a render item is the parent of the containing sprite
-            var parent = item is RenderItem ? item.Parent.Parent.ScriptObject : item.Parent.ScriptObject;
-
+            // TODO: By doing some search on the web,
+            // it seems like in Flash / ActionScript 3, when trying to access
+            // the `parent` of root object, null or undefined will be returned.
+            var parent = item is RenderItem ? item.Parent?.Parent?.ScriptObject : item.Parent?.ScriptObject;
             return Value.FromObject(parent);
         }
 

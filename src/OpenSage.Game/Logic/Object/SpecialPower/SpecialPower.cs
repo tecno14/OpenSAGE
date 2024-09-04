@@ -1,32 +1,196 @@
-﻿using System.IO;
+﻿using System;
+using System.Numerics;
+using ImGuiNET;
+using OpenSage.Content;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 
 namespace OpenSage.Logic.Object
 {
     public class SpecialPowerModule : BehaviorModule
     {
-        internal override void Load(BinaryReader reader)
+        /// <summary>
+        /// The next frame when this special power can be used
+        /// </summary>
+        private LogicFrame _availableAtFrame;
+        private bool _paused;
+        private LogicFrame _countdownEndFrame; // unclear what this is
+        private float _unknownFloat;
+
+        private readonly LogicFrameSpan _reloadFrames;
+
+        /// <summary>
+        /// Whether the special power is ready to be used.
+        /// </summary>
+        /// <remarks>
+        /// This intentionally doesn't call <see cref="_ready"/>, as that is used to short-circuit and is lazily set by <see cref="ReadyProgress"/>.
+        /// </remarks>
+        public bool Ready => ReadyProgress() >= 1;
+        private bool _ready;
+
+        protected readonly GameObject GameObject;
+        private protected readonly GameContext Context;
+        private readonly SpecialPowerModuleData _moduleData;
+
+        private bool _unlocked;
+
+        public SpecialPowerType SpecialPowerType => _moduleData.SpecialPower.Value.Type;
+
+        internal SpecialPowerModule(GameObject gameObject, GameContext context, SpecialPowerModuleData moduleData)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
+            GameObject = gameObject;
+            Context = context;
+            _moduleData = moduleData;
+            _reloadFrames = _moduleData.SpecialPower.Value.ReloadTime;
+            _paused = moduleData.StartsPaused;
+            if (!moduleData.SpecialPower.Value.SharedSyncedTimer)
             {
-                throw new InvalidDataException();
+                // items with a sharedsyncedtimer have their countdown set to 0 when not unlocked
+                ResetCountdown();
+            }
+        }
+
+        /// <summary>
+        /// How close the special power is to being ready, from 0 (not ready at all) to 1 (fully ready).
+        /// </summary>
+        public float ReadyProgress()
+        {
+            if (_paused)
+            {
+                return 0;
             }
 
-            base.Load(reader);
+            if (_reloadFrames == LogicFrameSpan.Zero)
+            {
+                _ready = true;
+            }
 
-            var unknown = reader.ReadBytes(16);
+            // quick short-circuit
+            if (_ready)
+            {
+                return 1;
+            }
+
+            var availableAtFrame = _availableAtFrame;
+            if (_moduleData.SpecialPower.Value.SharedSyncedTimer)
+            {
+                if (GameObject.Owner.SyncedSpecialPowerTimers.TryGetValue(_moduleData.SpecialPower.Value.Type, out var frame))
+                {
+                    availableAtFrame = frame;
+                }
+                else
+                {
+                    return 0; // if it's shared and not in our dictionary, then we probably don't have it unlocked and therefore it's not ready
+                }
+            }
+
+            var progress = 1 - Math.Clamp((availableAtFrame.Value - Math.Min(availableAtFrame.Value, Context.GameLogic.CurrentFrame.Value)) / (float)_reloadFrames.Value, 0, 1);
+            _ready = progress >= 1;
+            return progress;
+        }
+
+        internal override void Update(BehaviorUpdateContext context)
+        {
+            if (!_unlocked)
+            {
+                // the GLA cash bounty is actually awarded immediately upon a CC scaffold being placed - I suspect this is due to the reload time being zero
+                if (GameObject.IsBeingConstructed() && _moduleData.SpecialPower.Value.ReloadTime != LogicFrameSpan.Zero)
+                {
+                    return; // nothing for us to do if we're not even built yet
+                }
+
+                foreach (var requiredScience in _moduleData.SpecialPower.Value.RequiredSciences)
+                {
+                    if (!GameObject.Owner.HasScience(requiredScience.Value))
+                    {
+                        return;
+                    }
+                }
+
+                Unlock();
+            }
+        }
+
+        private void Unlock()
+        {
+            _unlocked = true;
+
+            if (_moduleData.SpecialPower.Value.PublicTimer)
+            {
+                return; // this is handled by SpecialPowerCreate
+            }
+
+            _availableAtFrame = Context.GameLogic.CurrentFrame;
+            if (_moduleData.SpecialPower.Value.SharedSyncedTimer)
+            {
+                var player = GameObject.Owner;
+                player.SyncedSpecialPowerTimers.TryAdd(_moduleData.SpecialPower.Value.Type, _availableAtFrame); // it shouldn't already be added, but this way we don't worry about it
+            }
+        }
+
+        public void Unpause()
+        {
+            _paused = false;
+            ResetCountdown();
+        }
+
+        public void ResetCountdown()
+        {
+            _availableAtFrame = Context.GameLogic.CurrentFrame + _moduleData.SpecialPower.Value.ReloadTime;
+            _ready = false;
+
+            if (_moduleData.SpecialPower.Value.SharedSyncedTimer)
+            {
+                GameObject.Owner.SyncedSpecialPowerTimers[_moduleData.SpecialPower.Value.Type] = _availableAtFrame;
+            }
+        }
+
+        internal virtual void Activate(Vector3 position)
+        {
+            var specialPower = _moduleData.SpecialPower.Value;
+            Context.AudioSystem.PlayAudioEvent(specialPower.InitiateSound?.Value);
+            Context.AudioSystem.PlayAudioEvent(position, specialPower.InitiateAtLocationSound?.Value);
+            ResetCountdown();
+        }
+
+        public bool Matches(SpecialPower specialPower)
+        {
+            return _moduleData.SpecialPower.Value == specialPower;
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistLogicFrame(ref _availableAtFrame);
+
+            reader.PersistBoolean(ref _paused);
+            reader.SkipUnknownBytes(3);
+
+            reader.PersistLogicFrame(ref _countdownEndFrame);
+            reader.PersistSingle(ref _unknownFloat);
+        }
+
+        internal override void DrawInspector()
+        {
+            base.DrawInspector();
+            ImGui.LabelText("Available at frame", _availableAtFrame.ToString());
+            ImGui.LabelText("Progress", $"{ReadyProgress():P2}%");
         }
     }
 
     public class SpecialPowerModuleData : BehaviorModuleData
     {
+        public override ModuleKinds ModuleKinds => ModuleKinds.SpecialPower;
+
         internal static SpecialPowerModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
 
         internal static readonly IniParseTable<SpecialPowerModuleData> FieldParseTable = new IniParseTable<SpecialPowerModuleData>
         {
-            { "SpecialPowerTemplate", (parser, x) => x.SpecialPowerTemplate = parser.ParseAssetReference() },
+            { "SpecialPowerTemplate", (parser, x) => x.SpecialPower = parser.ParseSpecialPowerReference() },
             { "StartsPaused", (parser, x) => x.StartsPaused = parser.ParseBoolean() },
             { "UpdateModuleStartsAttack", (parser, x) => x.UpdateModuleStartsAttack = parser.ParseBoolean() },
             { "InitiateSound", (parser, x) => x.InitiateSound = parser.ParseAssetReference() },
@@ -52,7 +216,7 @@ namespace OpenSage.Logic.Object
             { "RequirementsFilterStrategic", (parser, x) => x.RequirementsFilterStrategic = ObjectFilter.Parse(parser) }
         };
 
-        public string SpecialPowerTemplate { get; private set; }
+        public LazyAssetReference<SpecialPower> SpecialPower { get; private set; }
         public bool StartsPaused { get; private set; }
 
         [AddedIn(SageGame.Bfme)]
@@ -120,5 +284,10 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.Bfme2)]
         public ObjectFilter RequirementsFilterStrategic { get; private set; }
+
+        internal override SpecialPowerModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new SpecialPowerModule(gameObject, context, this);
+        }
     }
 }

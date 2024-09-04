@@ -30,7 +30,7 @@ namespace OpenSage.Diagnostics
             DiagnosticViewContext context,
             in Vector3 cameraTarget = default,
             float cameraDistance = 200,
-            Action<GameObjectCollection> createGameObjects = null)
+            Action<IGameObjectCollection> createGameObjects = null)
         {
             _context = context;
 
@@ -54,7 +54,7 @@ namespace OpenSage.Diagnostics
 
         public void Draw()
         {
-            ImGui.BeginChild("RenderedViewContent", Vector2.Zero, false, ImGuiWindowFlags.NoMove);
+            ImGui.BeginChild("RenderedViewContent", Vector2.Zero, ImGuiChildFlags.None, ImGuiWindowFlags.NoMove);
 
             var currentSize = ImGui.GetContentRegionAvail();
             if (_cachedSize != currentSize)
@@ -72,7 +72,7 @@ namespace OpenSage.Diagnostics
             var inputMessages = isMouseInRenderedView
                 ? ImGuiUtility.TranslateInputMessages(
                     new Mathematics.Rectangle((int) cursorScreenPos.X, (int) cursorScreenPos.Y, (int) currentSize.X, (int) currentSize.Y),
-                    _context.Game.Window.MessageQueue)
+                    _context.Window.MessageQueue)
                 : Array.Empty<InputMessage>();
 
             _inputMessageBuffer.PumpEvents(inputMessages);

@@ -1,38 +1,28 @@
-﻿using System.IO;
-using System.Linq;
-using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
+﻿using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
-    public sealed class WeaponSetUpgrade : UpgradeModule
+    internal sealed class WeaponSetUpgrade : UpgradeModule
     {
+        private readonly WeaponSetUpgradeModuleData _moduleData;
+
         internal WeaponSetUpgrade(GameObject gameObject, WeaponSetUpgradeModuleData moduleData) : base(gameObject, moduleData)
         {
+            _moduleData = moduleData;
         }
 
-        internal override void OnTrigger(BehaviorUpdateContext context, bool triggered)
+        protected override void OnUpgrade()
         {
-            if (triggered)
-            {
-                var weaponSet = _gameObject.Definition.WeaponSets.Values.FirstOrDefault(w => w.Conditions.Get(WeaponSetConditions.PlayerUpgrade));
-                _gameObject.SetWeaponSet(weaponSet);
-            }
-            else
-            {
-                _gameObject.SetDefaultWeapon();
-            }
+            _gameObject.SetWeaponSetCondition(WeaponSetConditions.PlayerUpgrade, true);
         }
 
-        internal override void Load(BinaryReader reader)
+        internal override void Load(StatePersister reader)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+            reader.PersistVersion(1);
 
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 

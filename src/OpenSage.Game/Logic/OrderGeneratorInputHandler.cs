@@ -26,6 +26,8 @@ namespace OpenSage.Logic
         public void Update()
         {
             _priority = HandlingPriority.OrderGeneratorPriority;
+
+            _orderGeneratorSystem.UpdatePosition(_mousePosition.ToVector2());
         }
 
         public override InputMessageResult HandleMessage(InputMessage message)
@@ -41,7 +43,6 @@ namespace OpenSage.Logic
                     else
                     {
                         _mousePosition = message.Value.MousePosition;
-                        _orderGeneratorSystem.UpdatePosition(_mousePosition.ToVector2());
                     }
                     break;
 
@@ -69,8 +70,9 @@ namespace OpenSage.Logic
                     break;
 
                 case InputMessageType.MouseRightButtonDown:
+                    // TODO: is this desirable if we don't actually deselect the unit, but simply pan the camera?
                     _orderGeneratorSystem.CancelOrderGenerator();
-                    return InputMessageResult.Handled;
+                    break;
 
                 case InputMessageType.KeyDown:
                     if (message.Value.Key == Veldrid.Key.ControlLeft ||

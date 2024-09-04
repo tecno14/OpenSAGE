@@ -1,10 +1,12 @@
-﻿﻿using System.Collections.Generic;
+﻿#nullable enable
+
+﻿using System.Collections.Generic;
 using System.IO;
 using OpenSage.Content;
 using OpenSage.Data;
 using OpenSage.Gui;
 using OpenSage.Gui.ControlBar;
-using OpenSage.Gui.UnitOverlay;
+using OpenSage.Gui.CommandListOverlay;
 
 namespace OpenSage
 {
@@ -12,7 +14,7 @@ namespace OpenSage
     {
         SageGame Game { get; }
         string DisplayName { get; }
-        IGameDefinition BaseGame { get; }
+        IGameDefinition? BaseGame { get; }
 
         bool LauncherImagePrefixLang { get; }
         string LauncherImagePath { get; }
@@ -20,16 +22,20 @@ namespace OpenSage
 
         IEnumerable<RegistryKeyPath> RegistryKeys { get; }
         IEnumerable<RegistryKeyPath> LanguageRegistryKeys { get; }
-        
+
         IMainMenuSource MainMenu { get; }
-        IControlBarSource ControlBar { get; }
-        IUnitOverlaySource UnitOverlay { get; }
+        IControlBarSource? ControlBar { get; }
+        ICommandListOverlaySource? CommandListOverlay { get; }
 
         string Identifier { get; }
 
         uint ScriptingTicksPerSecond { get; }
 
+        string GetLocalizedStringsPath(string language);
+
         OnDemandAssetLoadStrategy CreateAssetLoadStrategy();
+
+        Scene25D CreateScene25D(Scene3D scene3D, AssetStore assetStore);
 
         bool Probe(string directory) => File.Exists(Path.Combine(directory, LauncherExecutable));
     }

@@ -7,6 +7,15 @@ namespace OpenSage.Logic.Object
     public sealed class FireSpreadUpdate : UpdateModule
     {
         // TODO
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+        }
     }
 
     public sealed class FireSpreadUpdateModuleData : UpdateModuleData

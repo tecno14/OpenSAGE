@@ -1,115 +1,145 @@
 ﻿using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using ImGuiNET;
 using OpenSage.Audio;
-using OpenSage.Content;
+using OpenSage.Client;
 using OpenSage.Data.Map;
 using OpenSage.DataStructures;
 using OpenSage.Diagnostics;
-using OpenSage.Graphics;
 using OpenSage.Graphics.Cameras;
 using OpenSage.Graphics.Rendering;
 using OpenSage.Graphics.Shaders;
 using OpenSage.Gui.ControlBar;
+using OpenSage.Gui.InGame;
 using OpenSage.Logic.Object.Helpers;
 using OpenSage.Mathematics;
-using OpenSage.Mathematics.FixedMath;
+using FixedMath.NET;
+using OpenSage.Diagnostics.Util;
 using OpenSage.Terrain;
+using OpenSage.FileFormats;
+using OpenSage.Logic.Object.Damage;
 
 namespace OpenSage.Logic.Object
 {
     [DebuggerDisplay("[Object:{Definition.Name} ({Owner})]")]
-    public sealed class GameObject : DisposableBase, IInspectable, IHasCollider
+    public sealed class GameObject : Entity, IInspectable, ICollidable, IPersistableObject
     {
         internal static GameObject FromMapObject(
             MapObject mapObject,
-            AssetStore assetStore,
-            GameObjectCollection gameObjects,
-            HeightMap heightMap,
+            GameContext gameContext,
             bool useRotationAnchorOffset = true,
-            in float? overwriteAngle = 0.0f,
-            IReadOnlyList<Team> teams = null)
+            in float? overwriteAngle = 0.0f)
         {
-            var gameObject = gameObjects.Add(mapObject.TypeName);
+            TeamTemplate teamTemplate = null;
+            if (mapObject.Properties.TryGetValue("originalOwner", out var teamName))
+            {
+                var name = (string)teamName.Value;
+                if (name.Contains('/'))
+                {
+                    name = name.Split('/')[1];
+                }
+                teamTemplate = gameContext.Game.TeamFactory.FindTeamTemplateByName(name);
+            }
 
-            // TODO: Is there any valid case where we'd want to return null instead of throwing an exception?
-            if (gameObject == null)
+            var gameObjectDefinition = gameContext.AssetLoadContext.AssetStore.ObjectDefinitions.GetByName(mapObject.TypeName);
+
+            // TODO: Is there any valid case where we'd want to allow a game object to be null?
+            if (gameObjectDefinition is null)
             {
                 return null;
             }
 
-            if (gameObject.Body != null)
+            var gameObject = gameContext.GameLogic.CreateObject(gameObjectDefinition, teamTemplate?.Owner);
+            gameObject.TeamTemplate = teamTemplate;
+            gameObject.SetMapObjectProperties(mapObject, useRotationAnchorOffset, overwriteAngle);
+
+            return gameObject;
+        }
+
+        internal void SetMapObjectProperties(
+            MapObject mapObject,
+            bool useRotationAnchorOffset = true,
+            in float? overwriteAngle = 0.0f)
+        {
+            if (_body != null)
             {
                 var healthMultiplier = mapObject.Properties.TryGetValue("objectInitialHealth", out var health)
                     ? (uint) health.Value / 100.0f
                     : 1.0f;
 
-                gameObject.Body.SetInitialHealth(healthMultiplier);
+                _body.SetInitialHealth(healthMultiplier);
             }
 
             if (mapObject.Properties.TryGetValue("objectName", out var objectName))
             {
-                gameObject.Name = (string) objectName.Value;
-            }
-
-            if (teams != null)
-            {
-                if (mapObject.Properties.TryGetValue("originalOwner", out var teamName))
-                {
-                    var name = (string) teamName.Value;
-                    if (name.Contains('/'))
-                    {
-                        name = name.Split('/')[1];
-                    }
-                    var team = teams.FirstOrDefault(t => t.Name == name);
-                    gameObject.Team = team;
-                    gameObject.Owner = team?.Owner;
-                }
+                Name = (string) objectName.Value;
             }
 
             if (mapObject.Properties.TryGetValue("objectSelectable", out var selectable))
             {
-                gameObject.IsSelectable = (bool) selectable.Value;
+                IsSelectable = (bool) selectable.Value;
             }
 
             // TODO: handle "align to terrain" property
             var rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, overwriteAngle ?? mapObject.Angle);
             var rotationOffset = useRotationAnchorOffset
-                ? Vector4.Transform(new Vector4(gameObject.Definition.RotationAnchorOffset.X, gameObject.Definition.RotationAnchorOffset.Y, 0.0f, 1.0f), rotation)
+                ? Vector4.Transform(new Vector4(Definition.RotationAnchorOffset.X, Definition.RotationAnchorOffset.Y, 0.0f, 1.0f), rotation)
                 : Vector4.UnitW;
             var position = mapObject.Position + rotationOffset.ToVector3();
-            var height = heightMap.GetHeight(position.X, position.Y) + mapObject.Position.Z;
-            gameObject.UpdateTransform(new Vector3(position.X, position.Y, height), rotation,
-                gameObject.Definition.Scale);
+            var height = _gameContext.Scene3D.Terrain.HeightMap.GetHeight(position.X, position.Y) + mapObject.Position.Z;
+            UpdateTransform(new Vector3(position.X, position.Y, height), rotation,
+                Definition.Scale);
 
-            if (gameObject.Definition.IsBridge)
+            if (Definition.IsBridge)
             {
-                BridgeTowers.CreateForLandmarkBridge(assetStore, gameObjects, gameObject, mapObject);
+                BridgeTowers.CreateForLandmarkBridge(_gameContext, this);
             }
 
-            if (gameObject.Definition.KindOf.Get(ObjectKinds.Structure))
+            if (Definition.KindOf.Get(ObjectKinds.Horde))
             {
-                gameObject.BuildProgress = 1.0f;
-                gameObject._gameContext.Navigation.UpdateAreaPassability(gameObject, false);
+                FindBehavior<HordeContainBehavior>().Unpack();
             }
-
-            if (gameObject.Definition.KindOf.Get(ObjectKinds.Horde))
-            {
-                gameObject.FindBehavior<HordeContainBehavior>().Unpack();
-            }
-
-            return gameObject;
         }
 
-        internal void CopyModelConditionFlags(BitArray<ModelConditionFlag> newFlags)
+        private readonly Dictionary<string, ModuleBase> _tagToModuleLookup = new();
+        private readonly List<ModuleBase> _modules = new();
+
+        private void AddModule(string tag, ModuleBase module)
         {
-            ModelConditionFlags.CopyFrom(newFlags);
+            module.Tag = tag;
+            _modules.Add(module);
+            _tagToModuleLookup.Add(tag, module);
         }
 
-        private readonly Dictionary<string, BehaviorModule> _tagToModuleLookup;
+        private ModuleBase GetModuleByTag(string tag)
+        {
+            return _tagToModuleLookup[tag];
+        }
+
+        private readonly Dictionary<string, AttributeModifier> _attributeModifiers;
+
+        private uint _id;
+
+        public uint ID
+        {
+            get => _id;
+            internal set
+            {
+                var oldObjectId = _id;
+
+                _id = value;
+
+                _gameContext.GameLogic.OnObjectIdChanged(this, oldObjectId);
+            }
+        }
+
+        public Percentage ProductionModifier { get; set; } = new Percentage(1);
+        public Fix64 HealthModifier { get; set; }
+
 
         private readonly GameContext _gameContext;
 
@@ -121,16 +151,66 @@ namespace OpenSage.Logic.Object
 
         private BodyDamageType _bodyDamageType = BodyDamageType.Pristine;
 
+        internal BitArray<WeaponSetConditions> WeaponSetConditions;
+        private readonly WeaponSet _weaponSet;
+        public WeaponSet ActiveWeaponSet => _weaponSet;
+
         public readonly ObjectDefinition Definition;
+
+        public PartitionObject PartitionObject { get; internal set; }
+
+        public readonly Geometry Geometry;
 
         private readonly Transform _transform;
         public readonly Transform ModelTransform;
 
-        private void UpdateCollider()
+        private bool _objectMoved;
+
+        public uint CreatedByObjectID;
+        public uint BuiltByObjectID;
+
+        private BitArray<ObjectStatus> _status = new();
+        private byte _unknown2;
+        private GameObjectUnknownFlags _unknownFlags;
+        private readonly ShroudReveal _shroudRevealSomething1 = new();
+        private readonly ShroudReveal _shroudRevealSomething2 = new();
+        private readonly ShroudReveal _shroudRevealSomething3 = new();
+        private float _visionRange;
+        private float _shroudClearingRange;
+
+        public void ApplyVisionRangeScalar(float scalar)
         {
-            Collider.Update(_transform);
-            _gameContext.Quadtree.Update(this);
+            _shroudRevealSomething1.VisionRange *= scalar;
+            _visionRange *= scalar;
+            _shroudClearingRange *= scalar;
         }
+
+        public void RemoveVisionRangeScalar(float scalar)
+        {
+            _shroudRevealSomething1.VisionRange /= scalar;
+            _visionRange /= scalar;
+            _shroudClearingRange /= scalar;
+        }
+
+        private BitArray<DisabledType> _disabledTypes = new();
+        private readonly LogicFrame[] _disabledTypesFrames = new LogicFrame[9];
+        public readonly ObjectVeterancyHelper VeterancyHelper;
+        private uint _containerId;
+        public uint ContainerId => _containerId;
+        private uint _containedFrame;
+        private string _teamName;
+        private uint _enteredOrExitedPolygonTriggerFrame;
+        private Point3D _integerPosition;
+        private PolygonTriggerState[] _polygonTriggersState;
+        private int _unknown5;
+        private uint _unknownFrame;
+        public uint HealedByObjectId;
+        public uint HealedEndFrame;
+        private uint _weaponBonusTypes;
+        private byte _weaponSomethingPrimary;
+        private byte _weaponSomethingSecondary;
+        private byte _weaponSomethingTertiary;
+        private BitArray<SpecialPowerType> _specialPowers = new();
 
         public Transform Transform => _transform;
         public float Yaw => _transform.Yaw;
@@ -143,25 +223,33 @@ namespace OpenSage.Logic.Object
         public void SetTransformMatrix(Matrix4x4 matrix)
         {
             _transform.Matrix = matrix;
-            UpdateCollider();
+            _objectMoved = true;
         }
 
         public void SetTranslation(Vector3 translation)
         {
+            if (_transform.Translation == translation)
+            {
+                return;
+            }
             _transform.Translation = translation;
-            UpdateCollider();
+            OnObjectMoved();
         }
 
         public void SetRotation(Quaternion rotation)
         {
+            if (_transform.Rotation == rotation)
+            {
+                return;
+            }
             _transform.Rotation = rotation;
-            UpdateCollider();
+            OnObjectMoved();
         }
 
         public void SetScale(float scale)
         {
             _transform.Scale = scale;
-            UpdateCollider();
+            OnObjectMoved();
         }
 
         public void UpdateTransform(in Vector3? translation = null, in Quaternion? rotation = null, float scale = 1.0f)
@@ -169,24 +257,94 @@ namespace OpenSage.Logic.Object
             _transform.Translation = translation ?? _transform.Translation;
             _transform.Rotation = rotation ?? _transform.Rotation;
             _transform.Scale = scale;
-            UpdateCollider();
+            OnObjectMoved();
         }
 
-        public readonly IEnumerable<BitArray<ModelConditionFlag>> ModelConditionStates;
-
-        public readonly BitArray<ModelConditionFlag> ModelConditionFlags;
+        private void OnObjectMoved()
+        {
+            _objectMoved = true;
+            PartitionObject?.SetDirty();
+        }
 
         // Doing this with a field and a property instead of an auto-property allows us to have a read-only public interface,
         // while simultaneously supporting fast (non-allocating) iteration when accessing the list within the class.
-        public IReadOnlyList<DrawModule> DrawModules => _drawModules;
-        private readonly List<DrawModule> _drawModules;
-
         public IReadOnlyList<BehaviorModule> BehaviorModules => _behaviorModules;
-        private readonly List<BehaviorModule> _behaviorModules;
+        private readonly IReadOnlyList<BehaviorModule> _behaviorModules;
 
-        public readonly BodyModule Body;
+        // this allows us to avoid allocating and casting a new list when we just want a single object
+        private FrozenDictionary<Type, object> _firstBehaviorCache;
+        private FrozenDictionary<Type, List<object>> _behaviorCache;
 
-        public Collider Collider { get; }
+        private readonly BodyModule _body;
+        public bool HasActiveBody() => _body is ActiveBody;
+
+        public bool TryGetLastDamage(out DamageData damageData)
+        {
+            damageData = default;
+            if (_body is ActiveBody b)
+            {
+                damageData = b.LastDamage;
+                return true;
+            }
+
+            return false;
+        }
+
+        public Fix64 Health
+        {
+            get => _body?.Health ?? Fix64.Zero;
+            set => _body.Health = value < Fix64.Zero ? Fix64.Zero : value;
+        }
+
+        public Fix64 MaxHealth
+        {
+            get => _body?.MaxHealth + HealthModifier ?? Fix64.Zero;
+            set => _body.MaxHealth = value;
+        }
+        public Fix64 HealthPercentage => MaxHealth != Fix64.Zero ? Health / MaxHealth : Fix64.Zero;
+
+        public bool IsFullHealth => Health >= MaxHealth;
+
+        public bool IsDead => Health <= Fix64.Zero;
+
+        public void DoDamage(DamageType damageType, Percentage percentage, DeathType deathType, GameObject damageDealer) =>
+            DoDamage(damageType, MaxHealth * (Fix64)(float)percentage, deathType, damageDealer);
+
+        public void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, GameObject damageDealer)
+        {
+            _body.DoDamage(damageType, amount, deathType, damageDealer);
+            // units can have multiple delayed heal behaviors, as the default object has an inheritable autohealbehavior provided by veterancy
+            foreach (var autoHealBehavior in FindBehaviors<ISelfHealable>())
+            {
+                autoHealBehavior.RegisterDamage();
+            }
+        }
+
+        public void Heal(Percentage percentage, GameObject healer) => Heal(MaxHealth * (Fix64)(float)percentage, healer);
+
+        public void Heal(Fix64 amount, GameObject healer)
+        {
+            _body.Heal(amount, healer);
+            HealedByObjectId = healer?.ID ?? 0;
+        }
+
+        /// <summary>
+        /// Heals without any sort of healer or registering any sort of DamageData.
+        /// </summary>
+        public void HealDirectly(Percentage percentage) => HealDirectly(MaxHealth * (Fix64)(float)percentage);
+
+        /// <summary>
+        /// Heals without any sort of healer or registering any sort of DamageData.
+        /// </summary>
+        /// <param name="amount"></param>
+        public void HealDirectly(Fix64 amount)
+        {
+            _body.Heal(amount);
+        }
+
+        public Collider RoughCollider { get; set; }
+        public Collider ShapedCollider => Collider.Create(Definition.CurrentGeometryShape, Transform);
+        public List<Collider> Colliders { get; }
 
         public float VerticalOffset;
 
@@ -196,14 +354,18 @@ namespace OpenSage.Logic.Object
 
         public int Supply { get; set; }
 
-        public List<string> HiddenSubObjects;
+        public bool IsStructure { get; private set; }
+
+        public BitArray<ModelConditionFlag> ModelConditionFlags => Drawable.ModelConditionFlags;
+
+        public RadiusDecalTemplate SelectionDecal;
 
         private string _name;
 
         public string Name
         {
             get => _name;
-            set
+            private set
             {
                 if (_name != null)
                 {
@@ -211,35 +373,50 @@ namespace OpenSage.Logic.Object
                 }
 
                 _name = value ?? throw new ArgumentNullException(nameof(value));
-                Parent.AddNameLookup(this);
+                _gameContext.GameLogic.AddNameLookup(this);
             }
         }
 
         string IInspectable.Name => "GameObject";
 
-        public Team Team { get; set; }
+        public TeamTemplate TeamTemplate { get; set; }
 
-        public bool IsSelectable { get; private set; }
+        public Team Team { get; internal set; }
+
+        public bool IsSelectable;
         public bool IsProjectile { get; private set; } = false;
         public bool CanAttack { get; private set; }
 
         public bool IsSelected { get; set; }
 
-        public Vector3? RallyPoint { get; set; }
+        public Vector3? RallyPoint
+        {
+            get => FindBehavior<IHasRallyPoint>()?.RallyPointManager.RallyPoint;
+            set => FindBehavior<IHasRallyPoint>()?.RallyPointManager.SetRallyPoint(value);
+        }
 
-        internal Weapon CurrentWeapon { get; private set; }
+        internal Weapon CurrentWeapon => _weaponSet.CurrentWeapon;
 
-        private TimeSpan ConstructionStart { get; set; }
+        private LogicFrameSpan ConstructionProgress { get; set; }
 
-        public float BuildProgress { get; set; }
+        public LogicFrame? LifeTime { get; set; }
 
-        public bool Destroyed { get; set; }
+        private float _buildProgress100;
+
+        // todo: this is a bit convoluted, but the save file uses 0-100 whereas we use 0-1 for everything
+        public float BuildProgress
+        {
+            get => _buildProgress100 / 100;
+            set => _buildProgress100 = value * 100;
+        }
+
+        public bool Hidden { get; set; }
 
         public bool IsDamaged
         {
             get
             {
-                var healthPercentage = (float) Body.HealthPercentage;
+                var healthPercentage = (float) _body.HealthPercentage;
                 var damagedThreshold = _gameContext.AssetLoadContext.AssetStore.GameData.Current.UnitDamagedThreshold;
                 return healthPercentage <= damagedThreshold;
             }
@@ -249,69 +426,126 @@ namespace OpenSage.Logic.Object
         public float SteeringWheelsYaw { get; set; }
         public float Lift { get; set; }
 
+        public float TurretYaw { get; set; }
+        public float TurretPitch { get; set; }
+
         public bool IsPlacementPreview { get; set; }
 
         public bool IsPlacementInvalid { get; set; }
 
-        public GameObjectCollection Parent { get; private set; }
-
         public AIUpdate AIUpdate { get; }
         public ProductionUpdate ProductionUpdate { get; }
 
-        public List<UpgradeTemplate> Upgrades { get; }
-        public List<UpgradeTemplate> ConflictingUpgrades { get; }
+        private readonly UpgradeSet _upgrades = new();
 
-        public int ExperienceValue { get; private set; }
-        internal float ExperienceMultiplier { get; set; }
+        // We compute this every time it's requested, but we don't want
+        // to allocate a new object every time.
+        private readonly UpgradeSet _upgradesAll = new();
+
+        private const string VeterancyUpgradeNameVeteran = "Upgrade_Veterancy_VETERAN"; // doesn't seem to be used in any of the inis, but is present in the sav file
+        private const string VeterancyUpgradeNameElite = "Upgrade_Veterancy_ELITE";
+        private const string VeterancyUpgradeNameHeroic = "Upgrade_Veterancy_HEROIC";
+
+        public int Rank
+        {
+            get => (int) VeterancyHelper.VeterancyLevel;
+            set
+            {
+                var rank = (VeterancyLevel)value;
+                VeterancyHelper.VeterancyLevel = rank;
+                var upgradeToApply = rank switch
+                {
+                    VeterancyLevel.Veteran => VeterancyUpgradeNameVeteran,
+                    VeterancyLevel.Elite => VeterancyUpgradeNameElite,
+                    VeterancyLevel.Heroic => VeterancyUpgradeNameHeroic,
+                    _ => null,
+                };
+                // veterancy is only ever additive, and the inis allude to the fact that it is fine to skip upgrades and go straight from e.g. Veteran to Heroic
+                if (upgradeToApply != null)
+                {
+                    Upgrade(GameContext.Game.AssetStore.Upgrades.GetByName(upgradeToApply));
+                }
+            }
+        }
+
+        public int ExperienceValue
+        {
+            get => VeterancyHelper.ExperiencePoints;
+            set => VeterancyHelper.ExperiencePoints = value;
+        }
+        public int ExperienceRequiredForNextLevel { get; set; }
 
         public int EnergyProduction { get; internal set; }
 
         // TODO
         public ArmorTemplateSet CurrentArmorSet => Definition.ArmorSets.Values.First();
 
+        public readonly Drawable Drawable;
+
+        /// <summary>
+        /// A non-persisted queue of rising-cash-text items that should originate from this GameObject.
+        /// </summary>
+        public CashEvent? ActiveCashEvent { get; set; }
+
         private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
         internal GameObject(
             ObjectDefinition objectDefinition,
             GameContext gameContext,
-            Player owner,
-            GameObjectCollection parent)
+            Player owner)
         {
+            if (objectDefinition.BuildVariations != null && objectDefinition.BuildVariations.Count() > 0)
+            {
+                objectDefinition = objectDefinition.BuildVariations[gameContext.Random.Next(0, objectDefinition.BuildVariations.Count())].Value;
+            }
+
+            _objectMoved = true;
+            Hidden = false;
+
             Definition = objectDefinition ?? throw new ArgumentNullException(nameof(objectDefinition));
+            VeterancyHelper = new ObjectVeterancyHelper(this);
 
-            _tagToModuleLookup = new Dictionary<string, BehaviorModule>();
+            _attributeModifiers = new Dictionary<string, AttributeModifier>();
             _gameContext = gameContext;
-            Owner = owner;
-            Parent = parent;
+            Owner = owner ?? gameContext.Game.PlayerManager.GetCivilianPlayer();
 
-            _behaviorUpdateContext = new BehaviorUpdateContext(gameContext, this, TimeInterval.Zero);
+            _behaviorUpdateContext = new BehaviorUpdateContext(gameContext, this);
 
-            SetDefaultWeapon();
+            _weaponSet = new WeaponSet(this);
+            WeaponSetConditions = new BitArray<WeaponSetConditions>();
+            UpdateWeaponSet();
+
             _transform = Transform.CreateIdentity();
             ModelTransform = Transform.CreateIdentity();
             _transform.Scale = Definition.Scale;
 
-            var drawModules = new List<DrawModule>();
-            foreach (var drawData in objectDefinition.Draws.Values)
-            {
-                var drawModule = AddDisposable(drawData.CreateDrawModule(this, gameContext));
-                if (drawModule != null)
-                {
-                    // TODO: This will never be null once we've implemented all the draw modules.
-                    drawModules.Add(drawModule);
-                }
-            }
-            _drawModules = drawModules;
+            // TODO: Instead of GameObject owning the drawable, which makes logic tests a little awkward,
+            // perhaps create Drawable somewhere else and attach it to this GameObject?
+            Drawable = gameContext.GameClient?.CreateDrawable(objectDefinition, this);
 
             var behaviors = new List<BehaviorModule>();
+
+            _behaviorModules = behaviors;
 
             void AddBehavior(string tag, BehaviorModule behavior)
             {
                 behaviors.Add(behavior);
-                _tagToModuleLookup.Add(tag, behavior);
+                AddModule(tag, behavior);
             }
 
             AddBehavior("ModuleTag_SMCHelper", new ObjectSpecialModelConditionHelper());
+
+            if (objectDefinition.KindOf.Get(ObjectKinds.CanBeRepulsed))
+            {
+                AddBehavior("ModuleTag_RepulsorHelper", new ObjectRepulsorHelper());
+            }
+
+            // TODO: This shouldn't be added to all objects. I don't know what the rule is.
+            if (_gameContext.Game.SageGame >= SageGame.CncGeneralsZeroHour)
+            {
+                AddBehavior("ModuleTag_StatusDamageHelper", new StatusDamageHelper());
+                AddBehavior("ModuleTag_SubdualDamageHelper", new SubdualDamageHelper());
+            }
 
             // TODO: This shouldn't be added to all objects. I don't know what the rule is.
             // Maybe KindOf = CAN_ATTACK ?
@@ -325,37 +559,57 @@ namespace OpenSage.Logic.Object
             // Probably only those with weapons.
             AddBehavior("ModuleTag_FiringTrackerHelper", new ObjectFiringTrackerHelper());
 
-            foreach (var behaviorData in objectDefinition.Behaviors.Values)
+            // TODO: This shouldn't be added to all objects. I don't know what the rule is.
+            if (_gameContext.Game.SageGame is not SageGame.CncGenerals and not SageGame.CncGeneralsZeroHour)
             {
-                var module = AddDisposable(behaviorData.CreateModule(this, gameContext));
+                // this was added in bfme and is not present in generals or zero hour
+                AddBehavior("ModuleTag_ExperienceHelper", new ExperienceUpdate(this));
+            }
+
+            // TODO: This shouldn't be added to all objects. I don't know what the rule is.
+            if (_gameContext.Game.SageGame >= SageGame.CncGeneralsZeroHour)
+            {
+                AddBehavior("ModuleTag_TempWeaponBonusHelper", new TempWeaponBonusHelper());
+            }
+
+            foreach (var behaviorDataContainer in objectDefinition.Behaviors.Values)
+            {
+                var behaviorModuleData = (BehaviorModuleData) behaviorDataContainer.Data;
+                var module = AddDisposable(behaviorModuleData.CreateModule(this, gameContext));
+
+                // TODO: This will never be null once we've implemented all the behaviors.
                 if (module != null)
                 {
-                    // TODO: This will never be null once we've implemented all the behaviors.
-                    AddBehavior(behaviorData.Tag, module);
+                    AddBehavior(behaviorDataContainer.Tag, module);
+
+                    if (module is BodyModule body)
+                    {
+                        _body = body;
+                    }
+                    else if (module is AIUpdate aiUpdate)
+                    {
+                        AIUpdate = aiUpdate;
+                    }
+                    else if (module is ProductionUpdate productionUpdate)
+                    {
+                        ProductionUpdate = productionUpdate;
+                    }
                 }
             }
-            _behaviorModules = behaviors;
 
-            ProductionUpdate = FindBehavior<ProductionUpdate>();
+            Geometry = Definition.Geometry.Clone();
 
-            ModelConditionFlags = new BitArray<ModelConditionFlag>();
-
-            Body = AddDisposable(objectDefinition.Body.CreateBodyModule(this));
-            _tagToModuleLookup.Add(objectDefinition.Body.Tag, Body);
-
-            if (objectDefinition.AIUpdate != null)
+            Colliders = new List<Collider>();
+            foreach (var geometry in Geometry.Shapes)
             {
-                AIUpdate = AddDisposable(objectDefinition.AIUpdate.CreateAIUpdate(this));
-                _tagToModuleLookup.Add(objectDefinition.AIUpdate.Tag, AIUpdate);
+                Colliders.Add(Collider.Create(geometry, _transform));
             }
 
-            Collider = Collider.Create(objectDefinition, _transform);
+            RoughCollider = Collider.Create(Colliders);
 
-            ModelConditionStates = drawModules
-                .SelectMany(x => x.ModelConditionStates)
-                .Distinct()
-                .OrderBy(x => x.NumBitsSet)
-                .ToList();
+            _visionRange = Definition.VisionRange;
+            _shroudRevealSomething1.VisionRange = Definition.VisionRange;
+            _shroudClearingRange = Definition.ShroudClearingRange;
 
             IsSelectable = Definition.KindOf.Get(ObjectKinds.Selectable);
             CanAttack = Definition.KindOf.Get(ObjectKinds.CanAttack);
@@ -363,7 +617,8 @@ namespace OpenSage.Logic.Object
             if (Definition.KindOf.Get(ObjectKinds.AutoRallyPoint))
             {
                 var rpMarkerDef = gameContext.AssetLoadContext.AssetStore.ObjectDefinitions.GetByName("RallyPointMarker");
-                _rallyPointMarker = AddDisposable(new GameObject(rpMarkerDef, gameContext, owner, parent));
+                // TODO: Only create a Drawable, as suggested by DRAWABLE_ONLY.
+                _rallyPointMarker = AddDisposable(new GameObject(rpMarkerDef, gameContext, owner));
             }
 
             if (Definition.KindOf.Get(ObjectKinds.Projectile))
@@ -376,101 +631,174 @@ namespace OpenSage.Logic.Object
                 Supply = Definition.SupplyOverride > 0 ? Definition.SupplyOverride : gameContext.AssetLoadContext.AssetStore.GameData.Current.SupplyBoxesPerTree;
             }
 
-            HiddenSubObjects = new List<string>();
-            Upgrades = new List<UpgradeTemplate>();
-            ConflictingUpgrades = new List<UpgradeTemplate>();
-
             if (Definition.KindOf.Get(ObjectKinds.Structure))
             {
-                Upgrades.Add(GameContext.AssetLoadContext.AssetStore.Upgrades.GetByName("Upgrade_StructureLevel1"));
+                IsStructure = true;
             }
-
-            ExperienceMultiplier = 1.0f;
-            ExperienceValue = 0;
         }
 
-        // TODO: This probably shouldn't be here.
-        public Matrix4x4? GetWeaponFireFXBoneTransform(WeaponSlot slot, int index)
+        public bool AffectsAreaPassability
         {
-            foreach (var drawModule in _drawModules)
+            get
             {
-                var fireFXBone = drawModule.GetWeaponFireFXBone(slot);
-                if (fireFXBone != null)
+                if (!IsStructure)
                 {
-                    var (modelInstance, bone) = drawModule.FindBone(fireFXBone + (index + 1).ToString("D2"));
-                    if (bone != null)
-                    {
-                        return modelInstance.AbsoluteBoneTransforms[bone.Index];
-                    }
-                    break;
+                    return false;
                 }
-            }
+                if (_gameContext.Scene3D.Game.SageGame == SageGame.CncGenerals ||
+                    _gameContext.Scene3D.Game.SageGame == SageGame.CncGenerals)
+                {
+                    // SupplyWarehouse in CncGenerals has NoCollide
+                    return true;
+                }
+                return !Definition.KindOf.Get(ObjectKinds.NoCollide);
 
-            return null;
+            }
         }
 
-        // TODO: This probably shouldn't be here.
-        public Matrix4x4? GetWeaponLaunchBoneTransform(WeaponSlot slot, int index)
+        public bool IsKindOf(ObjectKinds kind) => Definition.KindOf.Get(kind);
+
+        public void AddAttributeModifier(string name, AttributeModifier modifier)
         {
-            foreach (var drawModule in _drawModules)
+            if (_attributeModifiers.ContainsKey(name))
             {
-                var fireFXBone = drawModule.GetWeaponLaunchBone(slot);
-                if (fireFXBone != null)
-                {
-                    var (modelInstance, bone) = drawModule.FindBone(fireFXBone + (index + 1).ToString("D2"));
-                    if (bone != null)
-                    {
-                        return modelInstance.AbsoluteBoneTransforms[bone.Index];
-                    }
-                    break;
-                }
+                return;
             }
-
-            return null;
+            _attributeModifiers.Add(name, modifier);
         }
 
-        public (ModelInstance modelInstance, ModelBone bone) FindBone(string boneName)
+        public void RemoveAttributeModifier(string name)
         {
-            foreach (var drawModule in _drawModules)
-            {
-                var (modelInstance, bone) = drawModule.FindBone(boneName);
-                if (bone != null)
-                {
-                    return (modelInstance, bone);
-                }
-            }
-
-            return (null, null);
+            _attributeModifiers[name].Invalid = true;
         }
 
-        internal void LogicTick(ulong frame, in TimeInterval time)
+        public void ShowCollider(string name)
         {
-            if (Destroyed)
+            if (Colliders.Any(x => x.Name.Equals(name)))
             {
                 return;
             }
 
-            // TODO: Should there be a BeforeLogicTick where we update this?
-            _behaviorUpdateContext.UpdateTime(time);
+            var newColliders = new List<Collider>();
+            foreach (var geometry in Definition.Geometry.Shapes)
+            {
+                if (geometry.Name.Equals(name))
+                {
+                    newColliders.Add(Collider.Create(geometry, Transform));
+                }
+            }
+
+            if (AffectsAreaPassability)
+            {
+                foreach (var collider in newColliders)
+                {
+                    _gameContext.Navigation.UpdateAreaPassability(collider, false);
+                }
+            }
+            Colliders.AddRange(newColliders);
+            RoughCollider = Collider.Create(Colliders);
+            _gameContext.Quadtree.Update(this);
+        }
+
+        public void HideCollider(string name)
+        {
+            if (!Colliders.Any(x => x.Name.Equals(name)))
+            {
+                return;
+            }
+
+            for (var i = Colliders.Count - 1; i >= 0; i--)
+            {
+                if (Colliders[i].Name.Equals(name))
+                {
+                    if (AffectsAreaPassability)
+                    {
+                        _gameContext.Navigation.UpdateAreaPassability(Colliders[i], true);
+                    }
+                    Colliders.RemoveAt(i);
+                }
+            }
+            RoughCollider = Collider.Create(Colliders);
+            _gameContext.Quadtree.Update(this);
+
+            if (AffectsAreaPassability)
+            {
+                _gameContext.Navigation.UpdateAreaPassability(this, false);
+            }
+        }
+
+        public void UpdateColliders()
+        {
+            RoughCollider.Update(_transform);
+            foreach (var collider in Colliders)
+            {
+                collider.Update(_transform);
+            }
+            _gameContext.Quadtree.Update(this);
+        }
+
+        internal void LogicTick(in TimeInterval time)
+        {
+            if (_objectMoved)
+            {
+                UpdateColliders();
+
+                if (AffectsAreaPassability)
+                {
+                    _gameContext.Navigation.UpdateAreaPassability(this, false);
+                }
+
+                _objectMoved = false;
+            }
 
             if (ModelConditionFlags.Get(ModelConditionFlag.Attacking))
             {
-                CurrentWeapon?.LogicTick(time);
+                CurrentWeapon?.LogicTick();
+            }
+            if (ModelConditionFlags.Get(ModelConditionFlag.Sold))
+            {
+                Die(DeathType.Normal);
+                ModelConditionFlags.Set(ModelConditionFlag.Sold, false);
             }
 
-            AIUpdate?.Update(_behaviorUpdateContext);
+            foreach (var (key, modifier) in _attributeModifiers)
+            {
+                if (!modifier.Applied)
+                {
+                    modifier.Apply(this, time);
+                }
+                else if (modifier.Invalid || modifier.Expired(time))
+                {
+                    modifier.Remove(this);
+                    _attributeModifiers.Remove(key);
+                }
+                else
+                {
+                    modifier.Update(this, time);
+                }
+            }
+        }
 
+        internal void Update()
+        {
+            VerifyHealer();
+            CheckDisabledStates();
             foreach (var behavior in _behaviorModules)
             {
+                if (IsDead && behavior is not SlowDeathBehavior and not LifetimeUpdate and not DeletionUpdate)
+                {
+                    continue; // if we're dead, we should only update SlowDeathBehavior, LifetimeUpdate, or DeletionUpdate
+                }
                 behavior.Update(_behaviorUpdateContext);
             }
         }
 
         public bool CanRecruitHero(ObjectDefinition definition)
         {
-            foreach (var obj in Parent.Items)
+            foreach (var obj in _gameContext.GameLogic.Objects)
             {
-                if (obj.Definition == definition && obj.Owner == Owner)
+                if (obj.Definition.Name == definition.Name
+                    && obj.Owner == Owner)
                 {
                     return false;
                 }
@@ -483,44 +811,51 @@ namespace OpenSage.Logic.Object
             return ProductionUpdate?.CanProduceObject(definition) ?? true;
         }
 
-        internal bool Intersects(GameObject other)
+        public bool CollidesWith(ICollidable other, bool twoDimensional = false)
         {
-            if (Collider == null || other.Collider == null)
+            if (RoughCollider == null || other.RoughCollider == null)
             {
                 return false;
             }
 
-            if (Definition.KindOf.Get(ObjectKinds.Immobile)
-                && other.Definition.KindOf.Get(ObjectKinds.Immobile))
+            if (!RoughCollider.Intersects(other.RoughCollider, twoDimensional))
             {
                 return false;
             }
 
-            return Collider.Intersects(other.Collider);
+            foreach (var collider in Colliders)
+            {
+                foreach (var otherCollider in other.Colliders)
+                {
+                    if (collider.Intersects(otherCollider, twoDimensional))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
-        internal void DoCollide(GameObject collidingObject, in TimeInterval time)
+        internal void OnCollide(GameObject collidingObject)
         {
-            // TODO: Can we avoid updating this every time?
-            _behaviorUpdateContext.UpdateTime(time);
+            Logger.Info($"GameObject {Definition.Name} colliding with {collidingObject.Definition.Name}");
 
             foreach (var behavior in _behaviorModules)
             {
-                behavior.OnCollide(_behaviorUpdateContext, collidingObject);
+                if (behavior is ICollideModule collideModule)
+                {
+                    collideModule.OnCollide(collidingObject);
+                }
             }
         }
 
-        private void HandleConstruction(in TimeInterval gameTime)
+        internal void OnDestroy()
         {
-            // Check if the unit is being constructed
-            if (IsBeingConstructed())
+            foreach (var behavior in _behaviorModules)
             {
-                var passed = gameTime.TotalTime - ConstructionStart;
-                BuildProgress = Math.Clamp((float) passed.TotalSeconds / Definition.BuildTime, 0.0f, 1.0f);
-
-                if (BuildProgress >= 1.0f)
+                if (behavior is IDestroyModule destroyModule)
                 {
-                    FinishConstruction();
+                    destroyModule.OnDestroy();
                 }
             }
         }
@@ -537,55 +872,196 @@ namespace OpenSage.Logic.Object
             return new Transform(worldPos);
         }
 
-        internal T FindBehavior<T>()
+        public T FindBehavior<T>()
         {
-            // TODO: Cache this?
-            return _behaviorModules.OfType<T>().FirstOrDefault();
+            if (_firstBehaviorCache == null)
+            {
+                InstantiateBehaviorCache();
+            }
+
+            return _firstBehaviorCache!.TryGetValue(typeof(T), out var behavior) ? (T)behavior : default;
         }
 
-        internal IEnumerable<T> FindBehaviors<T>()
+        public IEnumerable<T> FindBehaviors<T>()
         {
-            // TODO: Cache this?
-            return _behaviorModules.OfType<T>();
+            if (_behaviorCache == null)
+            {
+                InstantiateBehaviorCache();
+            }
+
+            return _behaviorCache!.TryGetValue(typeof(T), out var behaviors) ? behaviors.Cast<T>() : [];
         }
 
-        public bool UpgradeAvailable(UpgradeTemplate upgrade)
+        public T FindSpecialPowerBehavior<T>(SpecialPowerType specialPowerType) where T : SpecialPowerModule
+        {
+            return FindBehaviors<T>().FirstOrDefault(m => m.SpecialPowerType == specialPowerType);
+        }
+
+        public bool HasBehavior<T>()
+        {
+            return FindBehavior<T>() != null;
+        }
+
+        private void InstantiateBehaviorCache()
+        {
+            var cache = new Dictionary<Type, List<object>>();
+            var firstCache = new Dictionary<Type, object>();
+            foreach (var module in _behaviorModules)
+            {
+                var type = module.GetType();
+                foreach (var parent in GetParentTypes(type))
+                {
+                    if (!cache.TryGetValue(parent, out var value))
+                    {
+                        value = [];
+                        cache[parent] = value;
+                        firstCache[parent] = module;
+                    }
+
+                    value.Add(module);
+                }
+            }
+
+            _firstBehaviorCache = firstCache.ToFrozenDictionary();
+            _behaviorCache = cache.ToFrozenDictionary();
+        }
+
+        // modified https://stackoverflow.com/a/18375526
+        private static IEnumerable<Type> GetParentTypes(Type type)
+        {
+            yield return type;
+
+            // return all implemented or inherited interfaces
+            foreach (var i in type.GetInterfaces())
+            {
+                yield return i;
+            }
+
+            // return all inherited types
+            var currentBaseType = type.BaseType;
+            while (currentBaseType != null)
+            {
+                yield return currentBaseType;
+                currentBaseType = currentBaseType.BaseType;
+            }
+        }
+
+        public bool HasUpgrade(UpgradeTemplate upgrade)
         {
             if (upgrade == null)
             {
-                return false;
+                return true;
             }
 
-            return upgrade.Type == UpgradeType.Player ? Owner.Upgrades.Contains(upgrade) : Upgrades.Contains(upgrade);
+            return upgrade.Type == UpgradeType.Player
+                ? Owner.HasUpgrade(upgrade)
+                : _upgrades.Contains(upgrade);
         }
 
-        public bool ConflictingUpgradeAvailable(UpgradeTemplate upgrade)
+        public bool HasEnqueuedUpgrade(UpgradeTemplate upgrade)
         {
-            if (upgrade == null || upgrade.Type == UpgradeType.Player)
-            {
-                return false; // TODO: player invalid upgrades?
-            }
-            return ConflictingUpgrades.Contains(upgrade);
+            return upgrade.Type == UpgradeType.Player
+                ? Owner.HasEnqueuedUpgrade(upgrade)
+                : ProductionUpdate.ProductionQueue.Any(x => x.UpgradeDefinition == upgrade);
         }
 
-        internal void StartConstruction(in TimeInterval gameTime)
+        /// <summary>
+        /// Used to set an object status when the integer value of the bit is known but the actual enum value is not.
+        /// </summary>
+        /// <remarks>
+        /// When <see cref="ObjectStatus"/> is fully defined, this method should be removed.
+        /// </remarks>
+        public void SetUnknownStatus(int status, bool value)
         {
-            if (Definition.KindOf.Get(ObjectKinds.Structure))
+            _status.Set(status, value);
+        }
+
+        public void SetObjectStatus(ObjectStatus status, bool value)
+        {
+            _status.Set(status, value);
+        }
+
+        /// <summary>
+        /// Called when a foundation has been placed, but construction has not yet begun
+        /// </summary>
+        internal void PrepareConstruction()
+        {
+            if (!IsStructure)
             {
-                ModelConditionFlags.SetAll(false);
-                ModelConditionFlags.Set(ModelConditionFlag.ActivelyBeingConstructed, true);
-                ModelConditionFlags.Set(ModelConditionFlag.AwaitingConstruction, true);
-                ModelConditionFlags.Set(ModelConditionFlag.PartiallyConstructed, true);
-                ConstructionStart = gameTime.TotalTime;
+                return;
             }
 
-            _gameContext.Navigation.UpdateAreaPassability(this, false);
+            Health = Fix64.Zero;
+            ClearModelConditionFlags();
+
+            ModelConditionFlags.Set(ModelConditionFlag.ActivelyBeingConstructed, false);
+            ModelConditionFlags.Set(ModelConditionFlag.AwaitingConstruction, true);
+            ModelConditionFlags.Set(ModelConditionFlag.PartiallyConstructed, false);
+
+            _status.Set(ObjectStatus.UnderConstruction, true);
+
+            // flatten terrain around object
+            var centerPosition = _gameContext.Terrain.HeightMap.GetTilePosition(_transform.Translation);
+
+            if (centerPosition == null)
+            {
+                throw new InvalidStateException("object built outside of map bounds");
+            }
+
+            var (centerX, centerY) = centerPosition.Value;
+            var maxHeight = _gameContext.Terrain.HeightMap.GetHeight(centerX, centerY);
+            // on slopes, the height map isn't always exactly where our cursor is (our cursor is a float, and the heightmap is always a ushort), so snap the building to the nearest heightmap value
+            UpdateTransform(_transform.Translation with { Z = maxHeight }, _transform.Rotation);
+
+            // clear anything applicable in the build area (trees, rubble, etc)
+            var toDelete = new BitArray<ObjectKinds>(ObjectKinds.Shrubbery, ObjectKinds.ClearedByBuild); // this may not be completely accurate
+            foreach (var intersecting in _gameContext.Quadtree.FindIntersecting(ShapedCollider))
+            {
+                if (intersecting.Definition.KindOf.Intersects(toDelete))
+                {
+                    GameContext.GameLogic.DestroyObject(intersecting);
+                }
+            }
+
+            _gameContext.Terrain.SetMaxHeight(ShapedCollider, maxHeight);
+        }
+
+        /// <summary>
+        /// Called when the dozer gets within the bounding sphere of the object in generals
+        /// </summary>
+        internal void SetIsBeingConstructed()
+        {
+            ModelConditionFlags.Set(ModelConditionFlag.ActivelyBeingConstructed, true);
+            ModelConditionFlags.Set(ModelConditionFlag.PartiallyConstructed, true);
+            ModelConditionFlags.Set(ModelConditionFlag.AwaitingConstruction, false);
+        }
+
+        internal void AdvanceConstruction()
+        {
+            var lastBuildProgress = BuildProgress;
+            BuildProgress = Math.Clamp(++ConstructionProgress / Definition.BuildTime, 0.0f, 1.0f);
+            // structures can be attacked while under construction, and their health is a factor of their build progress;
+            var newHealth = (Fix64)(BuildProgress - lastBuildProgress) * MaxHealth;
+            HealDirectly(newHealth);
+
+            if (BuildProgress >= 1.0f)
+            {
+                FinishConstruction();
+            }
         }
 
         internal void FinishConstruction()
         {
             ClearModelConditionFlags();
+
+            _status.Set(ObjectStatus.UnderConstruction, false);
+
             EnergyProduction += Definition.EnergyProduction;
+
+            foreach (var module in FindBehaviors<ICreateModule>())
+            {
+                module.OnBuildComplete();
+            }
         }
 
         public bool IsBeingConstructed()
@@ -595,10 +1071,13 @@ namespace OpenSage.Logic.Object
                    ModelConditionFlags.Get(ModelConditionFlag.PartiallyConstructed);
         }
 
-        internal void UpdateDamageFlags(Fix64 healthPercentage)
+        public bool IsUnderActiveConstruction()
         {
-            // TODO: SoundOnDamaged
-            // TODO: SoundOnReallyDamaged
+            return ModelConditionFlags.Get(ModelConditionFlag.ActivelyBeingConstructed);
+        }
+
+        internal void UpdateDamageFlags(Fix64 healthPercentage, bool takingDamage)
+        {
             // TODO: SoundDie
             // TODO: TransitionDamageFX
 
@@ -606,15 +1085,33 @@ namespace OpenSage.Logic.Object
 
             if (healthPercentage < (Fix64) GameContext.AssetLoadContext.AssetStore.GameData.Current.UnitReallyDamagedThreshold)
             {
-                ModelConditionFlags.Set(ModelConditionFlag.ReallyDamaged, true);
+                if (takingDamage && !ModelConditionFlags.Get(ModelConditionFlag.ReallyDamaged))
+                {
+                    _gameContext.AudioSystem.PlayAudioEvent(Definition.SoundOnReallyDamaged?.Value);
+                }
+
+                if (!IsBeingConstructed())
+                {
+                    // prevents damaged flags from being set while the building is being constructed - generals has models for this it seems, but they're not implemented as far as I can tell?
+                    ModelConditionFlags.Set(ModelConditionFlag.ReallyDamaged, true);
+                    _bodyDamageType = BodyDamageType.ReallyDamaged;
+                }
+
                 ModelConditionFlags.Set(ModelConditionFlag.Damaged, false);
-                _bodyDamageType = BodyDamageType.ReallyDamaged;
             }
             else if (healthPercentage < (Fix64) GameContext.AssetLoadContext.AssetStore.GameData.Current.UnitDamagedThreshold)
             {
+                if (takingDamage && !ModelConditionFlags.Get(ModelConditionFlag.Damaged))
+                {
+                    _gameContext.AudioSystem.PlayAudioEvent(Definition.SoundOnDamaged?.Value);
+                }
+
+                if (!IsBeingConstructed())
+                {
+                    ModelConditionFlags.Set(ModelConditionFlag.Damaged, true);
+                    _bodyDamageType = BodyDamageType.Damaged;
+                }
                 ModelConditionFlags.Set(ModelConditionFlag.ReallyDamaged, false);
-                ModelConditionFlags.Set(ModelConditionFlag.Damaged, true);
-                _bodyDamageType = BodyDamageType.Damaged;
             }
             else
             {
@@ -623,59 +1120,31 @@ namespace OpenSage.Logic.Object
                 _bodyDamageType = BodyDamageType.Pristine;
             }
 
-            if (oldDamageType != _bodyDamageType)
+            if (oldDamageType == _bodyDamageType)
             {
-                foreach (var behavior in _behaviorModules)
-                {
-                    behavior.OnDamageStateChanged(
-                        _behaviorUpdateContext,
-                        oldDamageType,
-                        _bodyDamageType);
-                }
+                return;
+            }
+
+            foreach (var behavior in _behaviorModules)
+            {
+                behavior.OnDamageStateChanged(
+                    _behaviorUpdateContext,
+                    oldDamageType,
+                    _bodyDamageType);
             }
         }
 
         internal void LocalLogicTick(in TimeInterval gameTime, float tickT, HeightMap heightMap)
         {
-            if (Destroyed)
-            {
-                return;
-            }
-
-            HandleConstruction(gameTime);
-
             _rallyPointMarker?.LocalLogicTick(gameTime, tickT, heightMap);
+            Drawable.LogicTick();
         }
 
         internal void BuildRenderList(RenderList renderList, Camera camera, in TimeInterval gameTime)
         {
-            if (Destroyed || ModelConditionFlags.Get(ModelConditionFlag.Sold))
+            if (ModelConditionFlags.Get(ModelConditionFlag.Sold) || Hidden)
             {
                 return;
-            }
-
-            UpdateDrawModuleConditionStates();
-
-            // Update all draw modules
-            foreach (var drawModule in _drawModules)
-            {
-                drawModule.Update(gameTime);
-            }
-
-            // This must be done after processing anything that might update this object's transform.
-            var worldMatrix = ModelTransform.Matrix * _transform.Matrix;
-            foreach (var drawModule in _drawModules)
-            {
-                drawModule.SetWorldMatrix(worldMatrix);
-            }
-
-            var castsShadow = false;
-            switch (Definition.Shadow)
-            {
-                case ObjectShadowType.ShadowVolume:
-                case ObjectShadowType.ShadowVolumeNew:
-                    castsShadow = true;
-                    break;
             }
 
             var renderItemConstantsPS = new MeshShaderResources.RenderItemConstantsPS
@@ -685,15 +1154,9 @@ namespace OpenSage.Logic.Object
                 TintColor = IsPlacementInvalid ? new Vector3(1, 0.3f, 0.3f) : Vector3.One,
             };
 
-            foreach (var drawModule in _drawModules)
-            {
-                drawModule.BuildRenderList(
-                    renderList,
-                    camera,
-                    castsShadow,
-                    renderItemConstantsPS,
-                    HiddenSubObjects);
-            }
+            // This must be done after processing anything that might update this object's transform.
+            var worldMatrix = ModelTransform.Matrix * _transform.Matrix;
+            Drawable.BuildRenderList(renderList, camera, gameTime, worldMatrix, renderItemConstantsPS);
 
             if ((IsSelected || IsPlacementPreview) && _rallyPointMarker != null && RallyPoint != null)
             {
@@ -707,15 +1170,7 @@ namespace OpenSage.Logic.Object
         public void ClearModelConditionFlags()
         {
             ModelConditionFlags.SetAll(false);
-        }
-
-        private void UpdateDrawModuleConditionStates()
-        {
-            // TODO: Let each drawable use the appropriate TransitionState between ConditionStates.
-            foreach (var drawModule in _drawModules)
-            {
-                drawModule.UpdateConditionState(ModelConditionFlags, _gameContext.Random);
-            }
+            // todo: maintain map-based flags, such as NIGHT, SNOW, etc
         }
 
         public void OnLocalSelect(AudioSystem gameAudio)
@@ -737,87 +1192,49 @@ namespace OpenSage.Logic.Object
             }
         }
 
-        //TODO: use the target to figure out which sound triggers
-        public void OnLocalAttack(AudioSystem gameAudio)
+        internal void SetWeaponSetCondition(WeaponSetConditions condition, bool value)
         {
-            var audioEvent = Definition.VoiceAttack?.Value;
-            if (audioEvent != null && ParentHorde == null)
-            {
-                gameAudio.PlayAudioEvent(this, audioEvent);
-            }
+            WeaponSetConditions.Set(condition, value);
+            UpdateWeaponSet();
         }
 
-        internal void SetDefaultWeapon()
+        private void UpdateWeaponSet()
         {
-            // TODO: we currently always pick the weapon without any conditions.
-            var weaponSet = Definition.WeaponSets.Values.FirstOrDefault(x => x.Conditions?.AnyBitSet == false);
-            SetWeaponSet(weaponSet);
+            _weaponSet.Update();
         }
 
-        internal void SetWeaponSet(WeaponTemplateSet weaponSet)
+        internal void SetWarhead(WeaponTemplate weaponTemplate)
         {
-            if (weaponSet != null)
-            {
-                var aiUpdate = Definition.Behaviors.Values.OfType<AIUpdateModuleData>().FirstOrDefault();
-                var weaponSetUpdateData = weaponSet.ToWeaponSetUpdate(aiUpdate);
-
-                // Happens for BFME structures
-                if (weaponSetUpdateData.WeaponSlotHardpoints.Count == 0 &&
-                   weaponSetUpdateData.WeaponSlotTurrets.Count == 0)
-                {
-                    return;
-                }
-
-                // TODO: This weapon selection is all wrong, and should be done in WeaponSetUpdate.
-
-                var weaponSlotHardpoint = weaponSetUpdateData.WeaponSlotHardpoints.Count > 0
-                    ? weaponSetUpdateData.WeaponSlotHardpoints[0]
-                    : weaponSetUpdateData.WeaponSlotTurrets[0];
-
-                var weaponTemplate = weaponSlotHardpoint.Weapons[0].Template.Value;
-                SetWeapon(weaponTemplate);
-            }
-            else
-            {
-                CurrentWeapon = null;
-            }
+            // TODO
         }
 
-        internal void SetWeapon(WeaponTemplate weaponTemplate)
-        {
-            if (weaponTemplate != null)
-            {
-                CurrentWeapon = new Weapon(
-                this,
-                weaponTemplate,
-                0,
-                WeaponSlot.Primary,
-                _gameContext);
-            }
-            else
-            {
-                CurrentWeapon = null;
-            }
-        }
-
-        public bool CanEnqueue(CommandButton button)
+        public bool CanPurchase(CommandButton button)
         {
             if (button.Object != null && button.Object.Value != null)
             {
-                return CanConstructUnit(button.Object.Value);
+                return HasUpgrade(button.NeededUpgrade?.Value)
+                    && CanConstructUnit(button.Object.Value);
             }
             if (button.Upgrade != null && button.Upgrade.Value != null)
             {
-                return CanEnqueueUpgrade(button.Upgrade.Value);
+                return HasUpgrade(button.NeededUpgrade?.Value)
+                    && CanEnqueueUpgrade(button.Upgrade.Value);
+            }
+            if (button.Command == CommandType.CastleUnpack)
+            {
+                var castleBehavior = FindBehavior<CastleBehavior>();
+                return HasEnoughMoney(castleBehavior.GetUnpackCost(Owner));
             }
             return true;
         }
 
+        public bool HasEnoughMoney(float cost) => Owner.BankAccount.Money >= cost;
+
         public bool CanConstructUnit(ObjectDefinition objectDefinition)
         {
             return objectDefinition != null
-                && Owner.Money >= objectDefinition.BuildCost
-                && Owner.CanProduceObject(Parent, objectDefinition)
+                && HasEnoughMoney(objectDefinition.BuildCost)
+                && Owner.CanProduceObject(objectDefinition)
                 && CanProduceObject(objectDefinition);
         }
 
@@ -828,88 +1245,473 @@ namespace OpenSage.Logic.Object
                 return false;
             }
 
-            var userHasEnoughMoney = Owner.Money >= upgrade.BuildCost;
-            var hasQueuedUpgrade = ProductionUpdate.ProductionQueue.Any(x => x.UpgradeDefinition == upgrade);
-            var canEnqueue = ProductionUpdate.CanEnque();
-            var hasUpgrade = UpgradeAvailable(upgrade);
-            var upgradeIsInvalid = ConflictingUpgradeAvailable(upgrade);
+            var userHasEnoughMoney = HasEnoughMoney(upgrade.BuildCost);
+            var hasQueuedUpgrade = HasEnqueuedUpgrade(upgrade);
+            var canEnqueue = ProductionUpdate.CanEnqueue();
+            var hasUpgrade = HasUpgrade(upgrade);
 
-            return userHasEnoughMoney && canEnqueue && !hasQueuedUpgrade && !hasUpgrade && !upgradeIsInvalid;
+            var existingUpgrades = GetUpgradesCompleted();
+            existingUpgrades.Add(upgrade);
+
+            var upgradeModuleCanUpgrade = false;
+            var hasUpgradeBehaviors = false; // some objects don't have upgrade modules
+            foreach (var upgradeModule in FindBehaviors<IUpgradeableModule>())
+            {
+                hasUpgradeBehaviors = true;
+                if (upgradeModule.CanUpgrade(existingUpgrades))
+                {
+                    upgradeModuleCanUpgrade = true;
+                    break;
+                }
+            }
+
+            return userHasEnoughMoney && canEnqueue && !hasQueuedUpgrade && !hasUpgrade && (!hasUpgradeBehaviors || upgradeModuleCanUpgrade);
+        }
+
+        private UpgradeSet GetUpgradesCompleted()
+        {
+            _upgradesAll.Clear();
+            _upgradesAll.UnionWith(_upgrades);
+            _upgradesAll.UnionWith(Owner.UpgradesCompleted);
+            return _upgradesAll;
         }
 
         public void Upgrade(UpgradeTemplate upgrade)
         {
-            // TODO: do something
-            if (upgrade.Type == UpgradeType.Object)
+            _upgrades.Add(upgrade);
+
+            UpdateUpgradeableModules();
+        }
+
+        internal void UpdateUpgradeableModules()
+        {
+            var completedUpgrades = GetUpgradesCompleted();
+
+            foreach (var upgradeableModule in FindBehaviors<IUpgradeableModule>())
             {
-                Upgrades.Add(upgrade);
+                upgradeableModule.TryUpgrade(completedUpgrades);
             }
-            else if(upgrade.Type == UpgradeType.Player)
+        }
+
+        public void RemoveUpgrade(UpgradeTemplate upgrade)
+        {
+            _upgrades.Remove(upgrade);
+
+            // TODO: Set _triggered to false for all affected upgrade modules
+        }
+
+        public bool CanAttackObject(GameObject target)
+        {
+            return CanAttack && Definition.WeaponSets.Values.Any(t =>
+                t.Slots.Any(s => s?.Weapon.Value?.AntiMask.CanAttackObject(target) == true));
+        }
+
+        // todo: this probably is not correct
+        public bool IsAirborne(float groundDelta = 0.1f)
+        {
+            return Translation.Z - GameContext.Terrain.HeightMap.GetHeight(Translation.X, Translation.Y) > groundDelta;
+        }
+
+        internal void Kill(DeathType deathType)
+        {
+            _body.DoDamage(DamageType.Unresistable, _body.Health, deathType, null);
+        }
+
+        internal void Die(DeathType deathType)
+        {
+            Logger.Info("Object dying " + deathType);
+            bool construction = IsBeingConstructed();
+
+            if (construction)
             {
-               Owner.Upgrades.Add(upgrade);
+                ModelConditionFlags.Set(ModelConditionFlag.DestroyedWhilstBeingConstructed, true);
+
+                var mostRecentConstructor = GameContext.GameLogic.GetObjectById(BuiltByObjectID);
+                // mostRecentConstructor is set to the unit currently or most recently building us
+                if (mostRecentConstructor.AIUpdate is IBuilderAIUpdate builderAiUpdate && builderAiUpdate.BuildTarget == this)
+                {
+                    // mostRecentConstructor is still trying to build us
+                    mostRecentConstructor.AIUpdate.Stop();
+                }
             }
             else
             {
-                throw new InvalidOperationException("This should not happen");
+                ModelConditionFlags.Set(ModelConditionFlag.ReallyDamaged, false);
+                ModelConditionFlags.Set(ModelConditionFlag.Damaged, false);
             }
+
+            IsSelectable = false;
+            Owner.DeselectUnit(this);
+
+            if (!construction)
+            {
+                ExecuteRandomSlowDeathBehavior(deathType);
+            }
+
+            foreach (var module in _behaviorModules)
+            {
+                if (module is SlowDeathBehavior)
+                {
+                    // this is handled above
+                    continue;
+                }
+
+                module.OnDie(_behaviorUpdateContext, deathType, _status);
+            }
+
+            PlayDieSound(deathType);
         }
 
-        internal void Kill(DeathType deathType, TimeInterval time)
+        /// <summary>
+        /// Removes this object from the scene without playing any death effects or affecting stats.
+        /// </summary>
+        public void Destroy()
         {
-            Body.DoDamage(DamageType.Unresistable, Body.Health, deathType, time);
+            GameContext.GameLogic.DestroyObject(this);
         }
 
-        internal void Die(DeathType deathType, TimeInterval time)
+        private void ExecuteRandomSlowDeathBehavior(DeathType deathType)
         {
-            Logger.Info("Object dying " + deathType);
-
-            ModelConditionFlags.Set(ModelConditionFlag.ReallyDamaged, false);
-            ModelConditionFlags.Set(ModelConditionFlag.Damaged, false);
-
-            // TODO: Can we avoid updating this every time?
-            _behaviorUpdateContext.UpdateTime(time);
-
             // If there are multiple SlowDeathBehavior modules,
             // we need to use ProbabilityModifier to choose between them.
             var slowDeathBehaviors = FindBehaviors<SlowDeathBehavior>()
-                .Where(x => x.IsApplicable(deathType))
+                .Where(x => x.IsApplicable(deathType, _status))
                 .ToList();
-            if (slowDeathBehaviors.Count > 1)
-            {
-                var sumProbabilityModifiers = slowDeathBehaviors.Sum(x => x.ProbabilityModifier);
-                var random = _gameContext.Random.Next(sumProbabilityModifiers);
-                var cumulative = 0;
-                foreach (var deathBehavior in slowDeathBehaviors)
-                {
-                    cumulative += deathBehavior.ProbabilityModifier;
-                    if (random < cumulative)
-                    {
-                        deathBehavior.OnDie(_behaviorUpdateContext, deathType);
-                        return;
-                    }
-                }
-                throw new InvalidOperationException();
-            }
 
-            foreach (var dieModule in _behaviorModules)
+            var sumProbabilityModifiers = slowDeathBehaviors.Sum(x => x.ProbabilityModifier);
+            var random = _gameContext.Random.Next(sumProbabilityModifiers);
+            var cumulative = 0;
+            foreach (var deathBehavior in slowDeathBehaviors)
             {
-                dieModule.OnDie(_behaviorUpdateContext, deathType);
+                cumulative += deathBehavior.ProbabilityModifier;
+                if (random < cumulative)
+                {
+                    deathBehavior.OnDie(_behaviorUpdateContext, deathType, _status);
+                    return;
+                }
             }
         }
 
-        internal void Destroy()
+        private void PlayDieSound(DeathType deathType)
         {
-            Destroyed = true;
+            var voiceDie = deathType switch
+            {
+                DeathType.Burned => Definition.SoundDieFire?.Value,
+                DeathType.Poisoned or DeathType.PoisonedGamma or DeathType.PoisonedBeta => Definition.SoundDieToxin?.Value,
+                _ => null,
+            } ?? Definition.SoundDie?.Value;
+
+            if (voiceDie != null)
+            {
+                GameContext.AudioSystem.PlayAudioEvent(this, voiceDie);
+            }
+        }
+
+        public void SetSelectable(bool selectable)
+        {
+            IsSelectable = selectable;
+            _status.Set(ObjectStatus.Unselectable, !selectable);
+        }
+
+        internal void AddToContainer(uint containerId)
+        {
+            _containerId = containerId;
+            _containedFrame = _gameContext.GameLogic.CurrentFrame.Value;
+            var disabledUntilFrame = new LogicFrame(0x3FFFFFFFu); // not sure why this is this way;
+            Disable(DisabledType.Held, disabledUntilFrame);
+            Hidden = true;
+            SetSelectable(false);
+            _status.Set(ObjectStatus.Masked, true);
+            _status.Set(ObjectStatus.InsideGarrison, true); // even if it's a vehicle, tunnel, etc
+            Owner.DeselectUnit(this);
+        }
+
+        internal void RemoveFromContainer()
+        {
+            _containerId = 0;
+            _containedFrame = 0;
+            UnDisable(DisabledType.Held);
+            Hidden = false;
+            SetSelectable(true);
+            _status.Set(ObjectStatus.Masked, false);
+            _status.Set(ObjectStatus.InsideGarrison, false);
+        }
+
+        public void Disable(DisabledType type, LogicFrame frame)
+        {
+            _disabledTypes.Set(type, true);
+            _disabledTypesFrames[(int)type] = frame;
+        }
+
+        public void UnDisable(DisabledType type)
+        {
+            _disabledTypes.Set(type, false);
+            _disabledTypesFrames[(int)type] = LogicFrame.Zero;
+        }
+
+        private void CheckDisabledStates()
+        {
+            for (var i = 0; i < _disabledTypesFrames.Length; i++)
+            {
+                var disabledTypeFrame = _disabledTypesFrames[i];
+                if (disabledTypeFrame > LogicFrame.Zero && disabledTypeFrame < _gameContext.GameLogic.CurrentFrame)
+                {
+                    UnDisable((DisabledType)i);
+                }
+            }
+        }
+
+        internal void Sell()
+        {
+            ModelConditionFlags.Set(ModelConditionFlag.Sold, true);
+            _status.Set(ObjectStatus.Unselectable, true);
+            _status.Set(ObjectStatus.Sold, true);
+            Owner.DeselectUnit(this);
         }
 
         internal void GainExperience(int experience)
         {
-            ExperienceValue = (int) (ExperienceMultiplier * experience);
+            if (!Definition.IsTrainable)
+            {
+                return;
+            }
+
+            VeterancyHelper.GainExperience(experience);
         }
 
-        internal BehaviorModule GetModuleByTag(string tag)
+        internal void SetBeingHealed(GameObject healer, uint endFrame)
         {
-            return _tagToModuleLookup[tag];
+            HealedByObjectId = healer.ID;
+            HealedEndFrame = endFrame;
+        }
+
+        private void VerifyHealer()
+        {
+            if (HealedByObjectId != 0 && (IsFullHealth || _gameContext.GameLogic.CurrentFrame.Value >= HealedEndFrame))
+            {
+                HealedByObjectId = 0;
+                HealedEndFrame = 0; // todo: is this reset?
+            }
+        }
+
+        public void AddWeaponBonusType(WeaponBonusType bonusType)
+        {
+            _weaponBonusTypes |= (uint)bonusType;
+        }
+
+        public void RemoveWeaponBonusType(WeaponBonusType bonusType)
+        {
+            _weaponBonusTypes &= ~(uint)bonusType;
+        }
+
+        public void Persist(StatePersister reader)
+        {
+            var version = reader.PersistVersion(9);
+
+            var id = ID;
+            reader.PersistObjectID(ref id, "ObjectId");
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                ID = id;
+            }
+
+            var transform = reader.Mode == StatePersistMode.Write
+                ? Matrix4x3.FromMatrix4x4(_transform.Matrix)
+                : Matrix4x3.Identity;
+            reader.PersistMatrix4x3(ref transform);
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                SetTransformMatrix(transform.ToMatrix4x4());
+            }
+
+            var teamId = Team?.Id ?? 0u;
+            reader.PersistUInt32(ref teamId);
+            Team = GameContext.Game.TeamFactory.FindTeamById(teamId);
+
+            Owner = Team.Template.Owner;
+
+            reader.PersistObjectID(ref CreatedByObjectID);
+            reader.PersistUInt32(ref BuiltByObjectID);
+
+            var drawableId = Drawable.ID;
+            reader.PersistUInt32(ref drawableId);
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                Drawable.ID = drawableId;
+            }
+
+            reader.PersistAsciiString(ref _name);
+
+            if (version >= 9)
+            {
+                reader.PersistBitArray(ref _status);
+            }
+            else
+            {
+                reader.PersistBitArrayAsUInt32(ref _status); // this is stored as a uint in the sav file
+            }
+
+            reader.PersistByte(ref _unknown2);
+            reader.PersistEnumByteFlags(ref _unknownFlags);
+
+            reader.PersistObject(Geometry);
+
+            reader.PersistObject(_shroudRevealSomething1);
+            reader.PersistObject(_shroudRevealSomething2);
+
+            if (version >= 9)
+            {
+                reader.PersistObject(_shroudRevealSomething3);
+
+                reader.SkipUnknownBytes(66);
+            }
+
+            reader.PersistSingle(ref _visionRange);
+            reader.PersistSingle(ref _shroudClearingRange);
+
+            reader.SkipUnknownBytes(4);
+
+            reader.PersistBitArray(ref _disabledTypes);
+
+            reader.SkipUnknownBytes(1);
+
+            reader.PersistArray(
+                _disabledTypesFrames,
+                static (StatePersister persister, ref LogicFrame item) =>
+                {
+                    persister.PersistLogicFrameValue(ref item);
+                });
+
+            reader.SkipUnknownBytes(8);
+
+            if (version >= 9)
+            {
+                reader.SkipUnknownBytes(12);
+            }
+
+            reader.PersistObject(VeterancyHelper);
+            reader.PersistObjectID(ref _containerId);
+            reader.PersistFrame(ref _containedFrame);
+
+            // TODO: This goes up to 100, not 1, as other code in GameObject expects
+            reader.PersistSingle(ref _buildProgress100);
+
+            reader.PersistObject(_upgrades);
+
+            // Not always (but usually is) the same as the teamId above implies.
+            reader.PersistAsciiString(ref _teamName);
+
+            reader.SkipUnknownBytes(16);
+
+            byte polygonTriggerStateCount = (byte)(_polygonTriggersState?.Length ?? 0);
+            reader.PersistByte(ref polygonTriggerStateCount);
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                _polygonTriggersState = new PolygonTriggerState[polygonTriggerStateCount];
+            }
+
+            reader.PersistFrame(ref _enteredOrExitedPolygonTriggerFrame);
+            reader.PersistPoint3D(ref _integerPosition);
+
+            reader.BeginArray("PolygonTriggerStates");
+            for (var i = 0; i < polygonTriggerStateCount; i++)
+            {
+                reader.PersistObjectValue(ref _polygonTriggersState[i]);
+            }
+            reader.EndArray();
+
+            var unknown4 = 1;
+            reader.PersistInt32(ref unknown4);
+            if (unknown4 != 1)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistInt32(ref _unknown5); // 0, 1
+            reader.PersistBoolean(ref IsSelectable);
+            reader.PersistFrame(ref _unknownFrame);
+
+            reader.SkipUnknownBytes(4);
+
+            // Modules
+            var numModules = (ushort)_modules.Count;
+            reader.PersistUInt16(ref numModules);
+
+            reader.BeginArray("Modules");
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                for (var i = 0; i < numModules; i++)
+                {
+                    reader.BeginObject();
+
+                    var moduleTag = "";
+                    reader.PersistAsciiString(ref moduleTag);
+
+                    var module = GetModuleByTag(moduleTag);
+
+                    reader.BeginSegment($"{module.GetType().Name} module in game object {Definition.Name}");
+
+                    reader.PersistObject(module);
+
+                    reader.EndSegment();
+
+                    reader.EndObject();
+                }
+            }
+            else
+            {
+                foreach (var module in _modules)
+                {
+                    reader.BeginObject();
+
+                    var moduleTag = module.Tag;
+                    reader.PersistAsciiString(ref moduleTag);
+
+                    reader.BeginSegment($"{module.GetType().Name} module in game object {Definition.Name}");
+
+                    reader.PersistObject(module);
+
+                    reader.EndSegment();
+
+                    reader.EndObject();
+                }
+            }
+            reader.EndArray();
+
+            reader.PersistObjectID(ref HealedByObjectId);
+            reader.PersistFrame(ref HealedEndFrame);
+            reader.PersistBitArray(ref WeaponSetConditions);
+            reader.PersistUInt32(ref _weaponBonusTypes);
+
+            var weaponBonusTypesBitArray = new BitArray<WeaponBonusType>();
+            var weaponBonusTypeCount = EnumUtility.GetEnumCount<WeaponBonusType>();
+            for (var i = 0; i < weaponBonusTypeCount; i++)
+            {
+                var weaponBonusBit = (_weaponBonusTypes >> i) & 1;
+                weaponBonusTypesBitArray.Set(i, weaponBonusBit == 1);
+            }
+
+            reader.PersistByte(ref _weaponSomethingPrimary);
+            reader.PersistByte(ref _weaponSomethingSecondary);
+            reader.PersistByte(ref _weaponSomethingTertiary);
+            reader.PersistObject(_weaponSet);
+            reader.PersistBitArray(ref _specialPowers);
+
+            reader.SkipUnknownBytes(1);
+
+            var unknown6 = true;
+            reader.PersistBoolean(ref unknown6);
+            if (!unknown6)
+            {
+                throw new InvalidStateException();
+            }
+
+            var unknown7 = true;
+            reader.PersistBoolean(ref unknown7);
+            if (!unknown7)
+            {
+                throw new InvalidStateException();
+            }
         }
 
         void IInspectable.DrawInspector()
@@ -930,13 +1732,21 @@ namespace OpenSage.Logic.Object
 
             if (ImGui.Button("Kill"))
             {
-                // TODO: Time isn't right.
-                Kill(DeathType.Exploded, _gameContext.Scene3D.Game.MapTime);
+                Kill(DeathType.Exploded);
+            }
+
+            if ((Definition.IsTrainable || Definition.BuildVariations?.Any(v => v.Value.IsTrainable) == true) &&
+                ImGui.CollapsingHeader("Veterancy"))
+            {
+                ImGui.LabelText("Experience", VeterancyHelper.ExperiencePoints.ToString());
+                var rank = VeterancyHelper.VeterancyLevel;
+                ImGuiUtility.ComboEnum("Current Rank", ref rank);
+                Rank = (int)rank;
             }
 
             if (ImGui.CollapsingHeader("General", ImGuiTreeNodeFlags.DefaultOpen))
             {
-                ImGui.LabelText("DisplayName", Definition.DisplayName);
+                ImGui.LabelText("DisplayName", Definition.DisplayName ?? string.Empty);
 
                 var translation = _transform.Translation;
                 if (ImGui.DragFloat3("Position", ref translation))
@@ -944,8 +1754,31 @@ namespace OpenSage.Logic.Object
                     _transform.Translation = translation;
                 }
 
-                // TODO: Make this editable
+                ImGui.LabelText("ObjectStatus", _status.DisplayName);
+                if (ImGui.TreeNodeEx("Select ObjectStatus"))
+                {
+                    foreach (var flag in Enum.GetValues<ObjectStatus>())
+                    {
+                        if (ImGui.Selectable(flag.ToString(), _status.Get(flag)))
+                        {
+                            _status.Set(flag, !_status.Get(flag));
+                        }
+                    }
+                    ImGui.TreePop();
+                }
+
                 ImGui.LabelText("ModelConditionFlags", ModelConditionFlags.DisplayName);
+                if (ImGui.TreeNodeEx("Select ModelConditionFlags"))
+                {
+                    foreach (var flag in Enum.GetValues<ModelConditionFlag>())
+                    {
+                        if (ImGui.Selectable(flag.ToString(), ModelConditionFlags.Get(flag)))
+                        {
+                            ModelConditionFlags.Set(flag, !ModelConditionFlags.Get(flag));
+                        }
+                    }
+                    ImGui.TreePop();
+                }
 
                 var speed = Speed;
                 if (ImGui.InputFloat("Speed", ref speed))
@@ -960,17 +1793,17 @@ namespace OpenSage.Logic.Object
                 }
             }
 
-            foreach (var drawModule in DrawModules)
+            static void DrawInspector(ModuleBase module)
             {
-                if (ImGui.CollapsingHeader(drawModule.GetType().Name, ImGuiTreeNodeFlags.DefaultOpen))
+                if (ImGui.CollapsingHeader($"{module.GetType().Name} {module.Tag}", ImGuiTreeNodeFlags.DefaultOpen))
                 {
-                    drawModule.DrawInspector();
+                    module.DrawInspector();
                 }
             }
 
-            if (ImGui.CollapsingHeader(Body.GetType().Name, ImGuiTreeNodeFlags.DefaultOpen))
+            foreach (var drawModule in Drawable.DrawModules)
             {
-                Body.DrawInspector();
+                DrawInspector(drawModule);
             }
 
             if (CurrentWeapon != null)
@@ -984,11 +1817,110 @@ namespace OpenSage.Logic.Object
 
             foreach (var behaviorModule in BehaviorModules)
             {
-                if (ImGui.CollapsingHeader(behaviorModule.GetType().Name, ImGuiTreeNodeFlags.DefaultOpen))
-                {
-                    behaviorModule.DrawInspector();
-                }
+                DrawInspector(behaviorModule);
             }
+        }
+
+        [Flags]
+        private enum GameObjectUnknownFlags
+        {
+            None = 0,
+            Unknown1 = 1,
+            Unknown2 = 2,
+            Unknown4 = 4,
+            Unknown8 = 8,
+        }
+
+        protected override void Dispose(bool disposeManagedResources)
+        {
+            GameContext.GameClient.DestroyDrawable(Drawable);
+
+            base.Dispose(disposeManagedResources);
+        }
+    }
+
+    public record struct CashEvent(int Amount, ColorRgb Color, Vector3 Offset = default);
+
+    public sealed class ObjectVeterancyHelper : IPersistableObject
+    {
+        public VeterancyLevel VeterancyLevel;
+        public int ExperiencePoints;
+        private uint _experienceSinkObjectId;
+        public float ExperienceScalar = 1;
+
+        public bool ShowRankUpAnimation;
+
+        private readonly GameObject _gameObject;
+
+        internal ObjectVeterancyHelper(GameObject gameObject)
+        {
+            _gameObject = gameObject;
+        }
+
+        public void GainExperience(int experience)
+        {
+            if (_experienceSinkObjectId > 0)
+            {
+                var experienceSink = _gameObject.GameContext.GameLogic.GetObjectById(_experienceSinkObjectId);
+                experienceSink?.GainExperience(experience);
+                return;
+            }
+
+            ExperiencePoints += (int) (ExperienceScalar * experience);
+            var nextRank = (int)VeterancyLevel + 1;
+
+            if (_gameObject.Definition.ExperienceRequired == null || nextRank >= _gameObject.Definition.ExperienceRequired.Values.Length)
+            {
+                return; // nothing left for us to gain
+            }
+
+            var xpForNextRank =_gameObject.Definition.ExperienceRequired.Values[nextRank];
+            if (ExperiencePoints >= xpForNextRank)
+            {
+                VeterancyLevel = (VeterancyLevel) nextRank;
+                ShowRankUpAnimation = true;
+                _gameObject.GameContext.AudioSystem.PlayAudioEvent(_gameObject,
+                    _gameObject.GameContext.AssetLoadContext.AssetStore.MiscAudio.Current.UnitPromoted.Value);
+            }
+        }
+
+        public void Persist(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.PersistEnum(ref VeterancyLevel);
+            reader.PersistInt32(ref ExperiencePoints);
+            reader.PersistObjectID(ref _experienceSinkObjectId);
+            reader.PersistSingle(ref ExperienceScalar);
+        }
+    }
+
+    internal struct PolygonTriggerState : IPersistableObject
+    {
+        public PolygonTrigger PolygonTrigger;
+        public bool EnteredThisFrame;
+        private byte _unknown1;
+        public bool IsInside;
+
+        public void Persist(StatePersister reader)
+        {
+            var polygonTriggerName = PolygonTrigger?.Name;
+            reader.PersistAsciiString(ref polygonTriggerName);
+
+            if (reader.Mode == StatePersistMode.Read)
+            {
+                PolygonTrigger = reader.Game.Scene3D.MapFile.PolygonTriggers.GetPolygonTriggerByName(polygonTriggerName);
+            }
+
+            reader.PersistBoolean(ref EnteredThisFrame);
+
+            reader.PersistByte(ref _unknown1); // encountered 1 for TrainCoal on Alpine Assault, not every time
+            if (_unknown1 != 0 && _unknown1 != 1)
+            {
+                throw new InvalidStateException();
+            }
+
+            reader.PersistBoolean(ref IsInside);
         }
     }
 }

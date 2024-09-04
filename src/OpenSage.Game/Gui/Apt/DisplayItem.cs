@@ -5,30 +5,44 @@ using OpenSage.Data.Apt.Characters;
 using OpenSage.Graphics;
 using OpenSage.Gui.Apt.ActionScript;
 using OpenSage.Mathematics;
-using Veldrid;
 
 namespace OpenSage.Gui.Apt
 {
     public struct ItemTransform : ICloneable
     {
-        public static readonly ItemTransform None = new ItemTransform(ColorRgbaF.White, Matrix3x2.Identity, Vector2.Zero);
+        public static readonly ItemTransform None = new(ColorRgbaF.White, ColorRgbaF.Transparent, Matrix3x2.Identity, Vector2.Zero);
 
-        public ColorRgbaF ColorTransform;
+        public ColorRgbaF TintColorTransform;
+        public ColorRgbaF AdditiveColorTransform;
         public Matrix3x2 GeometryRotation;
         public Vector2 GeometryTranslation;
 
-        public ItemTransform(in ColorRgbaF color, in Matrix3x2 rotation, in Vector2 translation)
+        public ItemTransform(in ColorRgbaF tint, in ColorRgbaF add, in Matrix3x2 rotation, in Vector2 translation)
         {
-            ColorTransform = color;
+            TintColorTransform = tint;
+            AdditiveColorTransform = add;
             GeometryRotation = rotation;
             GeometryTranslation = translation;
         }
 
         public static ItemTransform operator *(in ItemTransform a, in ItemTransform b)
         {
-            return new ItemTransform(a.ColorTransform * b.ColorTransform,
-                                     a.GeometryRotation * b.GeometryRotation,
-                                     a.GeometryTranslation + b.GeometryTranslation);
+            /*  Combining ColorTransform:
+             *  f(x) = x * a + b
+             *  g(x) = x * i + j
+             *  g(f(x)) = (x * a + b) * i + j
+             *      = x * (a * i) + (b * i + j)
+             */
+            var tint = a.TintColorTransform * b.TintColorTransform;
+            var add = a.AdditiveColorTransform * b.TintColorTransform;
+            add += b.AdditiveColorTransform;
+            // FIXME: Adobe's specification claims that colors are clamped between 0 and 255
+            // during every single step of transformation.
+            // Probably We can't achieve that by using our current ItemTransform.
+            return new(tint,
+                       add,
+                       a.GeometryRotation * b.GeometryRotation,
+                       a.GeometryTranslation + b.GeometryTranslation);
         }
 
         public void Scale(float x, float y)
@@ -36,11 +50,17 @@ namespace OpenSage.Gui.Apt
             GeometryRotation = Matrix3x2.Multiply(Matrix3x2.CreateScale(x, y), GeometryRotation);
         }
 
-        public ItemTransform WithColorTransform(in ColorRgbaF color)
+        public ItemTransform WithColorTransform(in ColorRgbaF tint, in ColorRgbaF add)
         {
-            return new ItemTransform(color,
-                         GeometryRotation,
-                         GeometryTranslation);
+            return new(tint,
+                       add,
+                       GeometryRotation,
+                       GeometryTranslation);
+        }
+
+        public ColorRgbaF TransformColor(in ColorRgbaF sourceColor)
+        {
+            return sourceColor * TintColorTransform + AdditiveColorTransform;
         }
 
         public object Clone()
@@ -50,7 +70,7 @@ namespace OpenSage.Gui.Apt
     }
 
     [DebuggerDisplay("[DisplayItem:{Name}]")]
-    public abstract class DisplayItem
+    public abstract class DisplayItem : DisposableBase
     {
         public AptContext Context { get; protected set; }
         public SpriteItem Parent { get; protected set; }
@@ -63,7 +83,8 @@ namespace OpenSage.Gui.Apt
 
         public bool Highlight { get; set; }
 
-        internal RenderTarget ClipMask { get; set; }
+        internal RenderTarget ClipMask { get => _clipMask; set => DisposeAndAssign(ref _clipMask, value); }
+        private RenderTarget _clipMask;
 
         /// <summary>
         /// Create a new DisplayItem

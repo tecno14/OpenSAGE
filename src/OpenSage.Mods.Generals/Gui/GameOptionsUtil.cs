@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using NLog;
 using OpenSage.Content;
 using OpenSage.Content.Translation;
@@ -15,13 +16,16 @@ namespace OpenSage.Mods.Generals.Gui
 {
     public class GameOptionsUtil
     {
-
         protected static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
         public const string ComboBoxTeamPrefix = ":ComboBoxTeam";
         public const string ComboBoxPlayerTemplatePrefix = ":ComboBoxPlayerTemplate";
         public const string ComboBoxColorPrefix = ":ComboBoxColor";
         public const string ComboBoxPlayerPrefix = ":ComboBoxPlayer";
+        public const string ButtonAcceptPrefix = ":ButtonAccept";
+        public const string ButtonStart = ":ButtonStart";
+        public const string ButtonSelectMap = ":ButtonSelectMap";
+        public const string MapWindow = ":MapWindow";
 
         private readonly string _optionsPath;
         private readonly string _mapSelectPath;
@@ -30,7 +34,6 @@ namespace OpenSage.Mods.Generals.Gui
         private readonly Game _game;
 
         public MapCache CurrentMap { get; private set; }
-        public Action<int, string, int> OnSlotIndexChange { get; internal set; }
 
         public GameOptionsUtil(Window window, Game game, string basePrefix)
         {
@@ -51,10 +54,16 @@ namespace OpenSage.Mods.Generals.Gui
                 }
             }
 
-            FillComboBoxOptions(_optionsPath + ComboBoxTeamPrefix, new[]
-            {
-                "Team:0", "Team:1", "Team:2", "Team:3", "Team:4"
-            });
+            FillComboBoxOptions(
+                _optionsPath + ComboBoxTeamPrefix,
+                new[]
+                {
+                    "Team:0", "Team:1", "Team:2", "Team:3", "Team:4"
+                },
+                new object[]
+                {
+                    (sbyte)-1, (sbyte)0, (sbyte)1,(sbyte)2,(sbyte)3,
+                });
 
             _playableSides = _game.GetPlayableSides().ToList();
             if (_playableSides.Count > 0)
@@ -67,8 +76,10 @@ namespace OpenSage.Mods.Generals.Gui
 
             if (game.AssetStore.MultiplayerColors.Count > 0)
             {
-                var colors = game.AssetStore.MultiplayerColors.Select(i => new Tuple<string, ColorRgbaF>(i.TooltipName, i.RgbColor.ToColorRgbaF())).ToList();
-                var randomColor = new Tuple<string, ColorRgbaF>("GUI:???", ColorRgbaF.White);
+                var colors = game.AssetStore.MultiplayerColors
+                    .Select((c, i) => new Tuple<sbyte, string, ColorRgbaF>((sbyte) i, c.TooltipName, c.RgbColor.ToColorRgbaF()))
+                    .ToList();
+                var randomColor = new Tuple<sbyte, string, ColorRgbaF>(-1, "GUI:???", ColorRgbaF.White);
                 colors.Insert(0, randomColor);
 
                 FillColorComboBoxOptions(colors.ToArray());
@@ -78,15 +89,15 @@ namespace OpenSage.Mods.Generals.Gui
             {
                 "GUI:Open", "GUI:Closed", "GUI:EasyAI", "GUI:MediumAI", "GUI:HardAI"
             });
-            
-            foreach(var prefix in new String[]{
+
+            foreach (var prefix in new string[]{
                 ComboBoxTeamPrefix,
                 ComboBoxPlayerTemplatePrefix,
                 ComboBoxColorPrefix,
                 ComboBoxPlayerPrefix
             })
             {
-                for(var j = 0; j < 8; j++)
+                for (var j = 0; j < SkirmishGameSettings.MaxNumberOfPlayers; j++)
                 {
                     var i = j;
                     var key = _optionsPath + prefix + i;
@@ -96,95 +107,290 @@ namespace OpenSage.Mods.Generals.Gui
                     if (comboBox != null)
                     {
                         var listBox = (ListBox) comboBox.Controls[2];
-                        listBox.SelectedIndexChanged += (sender, e) =>
-                        {
-                            OnSlotIndexChange?.Invoke(i, prefix, comboBox.SelectedIndex);
-                        };
+                        listBox.SelectedIndexChanged += (sender, e) => OnSlotIndexChanged(i, prefix, comboBox.SelectedIndex, comboBox.Items[comboBox.SelectedIndex].DataItem);
                     }
                     else
                     {
                         Logger.Error($"Did not find control {key}");
                         continue;
                     }
-
-
                 }
-                
+            }
+
+            var mapWindow = _window.Controls.FindControl(_optionsPath + MapWindow);
+            for (int i = 0; i < SkirmishGameSettings.MaxNumberOfPlayers; i++)
+            {
+                var startPosition = (byte)(i + 1);
+                ((Button) mapWindow.Controls[i]).Click += (s, e) => StartingPositionClicked(_game.SkirmishManager.Settings, startPosition);
+            }
+
+            _window.Controls.FindControl(_optionsPath + ButtonSelectMap).Enabled = _game.SkirmishManager.IsHosting;
+        }
+
+        public static void StartingPositionClicked(SkirmishGameSettings settings, byte clickedPosition)
+        {
+            var currentlyAssignedPlayer = settings.Slots.FirstOrDefault(s => s.StartPosition == clickedPosition)?.Index ?? -1;
+
+            var assignablePlayers = settings.Slots
+                                            .Where(CanAssignPosition)
+                                            .Select(s => s.Index)
+                                            .ToList();
+
+            var indexOfCurrentlyAssignedPlayer = assignablePlayers.IndexOf(currentlyAssignedPlayer);
+            if (currentlyAssignedPlayer >= 0)
+            {
+                // the clicked position is already assigned
+                if (indexOfCurrentlyAssignedPlayer < 0)
+                {
+                    // the assigned player cannot be removed
+                    return;
+                }
+
+                settings.Slots[currentlyAssignedPlayer].StartPosition = 0;
+                Logger.Trace($"Removed player {currentlyAssignedPlayer} from position {clickedPosition}");
+            }
+
+            // find the next assignable player without a starting position
+            for (int index = indexOfCurrentlyAssignedPlayer + 1; index < assignablePlayers.Count; index++)
+            {
+                var nextPlayer = assignablePlayers[index];
+                var slot = settings.Slots[nextPlayer];
+                if (slot.StartPosition == 0)
+                {
+                    slot.StartPosition = clickedPosition;
+                    Logger.Trace($"Assigned player {slot.Index} to position {clickedPosition}");
+                    return;
+                }
+            }
+
+            // if the clicked position is free and all assignable players already have a position,
+            // re-assigned the local player
+            if (currentlyAssignedPlayer < 0)
+            {
+                settings.LocalSlot.StartPosition = clickedPosition;
+                Logger.Trace($"Assigned local player {settings.LocalSlotIndex} to position {clickedPosition}");
+            }
+
+            bool CanAssignPosition(SkirmishSlot slot)
+            {
+                var isLocalSlot = slot.Index == settings.LocalSlotIndex;
+                var isAI = slot.State == SkirmishSlotState.EasyArmy
+                    || slot.State == SkirmishSlotState.MediumArmy
+                    || slot.State == SkirmishSlotState.HardArmy;
+
+                return isLocalSlot || (settings.IsHost && isAI);
             }
         }
 
-        public bool HandleSystem(Control control, WndWindowMessage message, ControlCallbackContext context)
+        private void OnSlotIndexChanged(int index, string name, int value, object dataItem)
+        {
+            var slot = _game.SkirmishManager.Settings.Slots[index];
+
+            switch (name)
+            {
+                case ComboBoxColorPrefix:
+                    Logger.Trace($"Changed the color box to {value}");
+                    slot.ColorIndex = (sbyte) dataItem;
+                    break;
+                case ComboBoxPlayerPrefix:
+                    Logger.Trace($"Changed the player type box to {value}");
+
+                    var wasHumanPlayer = slot.State == SkirmishSlotState.Human;
+
+                    slot.State = value switch
+                    {
+                        0 => SkirmishSlotState.Open,
+                        1 => SkirmishSlotState.Closed,
+                        2 => SkirmishSlotState.EasyArmy,
+                        3 => SkirmishSlotState.MediumArmy,
+                        4 => SkirmishSlotState.HardArmy,
+                        _ => throw new ArgumentException("invalid player type: " + value)
+                    };
+
+                    if (slot.State == SkirmishSlotState.Open || slot.State == SkirmishSlotState.Closed || wasHumanPlayer)
+                    {
+                        slot.ClientId = null;
+                        slot.PlayerName = null;
+                        slot.StartPosition = 0;
+                        slot.ColorIndex = 0;
+                        slot.FactionIndex = 0;
+                        slot.Team = 0;
+                        slot.Ready = false;
+                        slot.ReadyUpdated = false;
+                    }
+
+                    if (wasHumanPlayer)
+                    {
+                        ((HostSkirmishManager) _game.SkirmishManager).Disconnect(slot);
+                    }
+
+                    break;
+                case ComboBoxPlayerTemplatePrefix:
+                    Logger.Trace($"Changed the faction box to {value}");
+                    slot.FactionIndex = (byte) value;
+                    break;
+                case ComboBoxTeamPrefix:
+                    Logger.Trace($"Changed the team box to {value}");
+                    slot.Team = (sbyte) dataItem;
+                    break;
+            }
+        }
+
+        public async Task<bool> HandleSystemAsync(Control control, WndWindowMessage message, ControlCallbackContext context)
         {
             switch (message.MessageType)
             {
                 case WndWindowMessageType.SelectedButton:
-                    if (message.Element.Name == _optionsPath + ":ButtonSelectMap")
+                    if (message.Element.Name == _optionsPath + ButtonSelectMap)
                     {
                         OpenMapSelection(context);
                     }
-                    else if (message.Element.Name == _optionsPath + ":ButtonStart")
+                    else if (message.Element.Name == _optionsPath + ButtonStart)
                     {
-                        ParsePlayerSettings(context.Game, out PlayerSetting?[] settings);
-
-                        if (!ValidateSettings(settings, context.WindowManager))
+                        if (_game.SkirmishManager.Settings.Slots.Count(s => s.State != SkirmishSlotState.Open && s.State != SkirmishSlotState.Closed) > CurrentMap.NumPlayers)
                         {
+                            context.WindowManager.ShowMessageBox(
+                                "GUI:ErrorStartingGame".Translate(),
+                                "LAN:TooManyPlayers".TranslateFormatted(CurrentMap.NumPlayers)); // TODO: this doesn't replace %d correctly yet
+
                             return true;
-                        }
-
-                        if (_optionsPath.StartsWith("LanGame"))
-                        {
-                            context.Game.HostSkirmishGame();
-                        }
-
-                        if (context.Game.SkirmishManager?.SkirmishGame != null)
-                        {
-                            if (context.Game.SkirmishManager.IsHosting)
-                            {
-                                context.Game.Scene2D.WndWindowManager.PopWindow();
-
-                                context.Game.SkirmishManager.StartGame();
-                            }
-                            else
-                            {
-                                context.Game.SkirmishManager.SkirmishGame.LocalSlot.Ready = true;
-                            }
                         }
                         else
                         {
-                            context.Game.StartMultiPlayerGame(
-                                CurrentMap.Name,
-                                new EchoConnection(),
-                                settings,
-                                0);
+                            var availablePositions = new List<byte>(CurrentMap.NumPlayers);
+                            for (byte a = 1; a <= CurrentMap.NumPlayers; a++)
+                            {
+                                availablePositions.Add(a);
+                            }
+
+                            foreach (var slot in _game.SkirmishManager.Settings.Slots)
+                            {
+                                if (slot.StartPosition != 0)
+                                {
+                                    availablePositions.Remove(slot.StartPosition);
+                                }
+                            }
+
+                            var random = new Random(_game.SkirmishManager.Settings.Seed);
+
+                            foreach (var slot in _game.SkirmishManager.Settings.Slots)
+                            {
+                                // Close open slots.
+                                if (slot.State == SkirmishSlotState.Open)
+                                {
+                                    slot.State = SkirmishSlotState.Closed;
+                                }
+
+                                if (slot.State != SkirmishSlotState.Closed)
+                                {
+                                    if (slot.StartPosition == 0)
+                                    {
+                                        slot.StartPosition = availablePositions.Last();
+                                        availablePositions.Remove(slot.StartPosition);
+                                    }
+
+                                    if (slot.FactionIndex == 0)
+                                    {
+                                        slot.FactionIndex = (byte) random.Next(1, _game.GetPlayableSides().Count() + 1);
+                                    }
+
+                                    if (slot.ColorIndex == -1)
+                                    {
+                                        slot.ColorIndex = (sbyte) random.Next(slot.ColorIndex, _game.AssetStore.MultiplayerColors.Count);
+                                    }
+                                }
+                            }
+
+                            await context.Game.SkirmishManager.HandleStartButtonClickAsync();
                         }
                     }
-                    else
-                    {
-                        return false;
-                    }
+
                     break;
-                default:
-                    return false;
             }
 
-            return true;
+            return false;
         }
 
-        private bool ValidateSettings(PlayerSetting?[] settings, WndWindowManager manager)
+        public void UpdateUI(Window window)
         {
-            if (settings.Length > CurrentMap.NumPlayers)
+            var mapName = _game.SkirmishManager.Settings.MapName;
+            if (mapName != CurrentMap.Name && mapName != null)
             {
-                var translation = _game.ContentManager.TranslationManager;
-                var messageBox = manager.PushWindow(@"Menus\MessageBox.wnd");
-                messageBox.Controls.FindControl("MessageBox.wnd:StaticTextTitle").Text = "GUI:ErrorStartingGame".Translate();
-                var staticTextTitle = messageBox.Controls.FindControl("MessageBox.wnd:StaticTextTitle") as Label;
-                staticTextTitle.TextAlignment = TextAlignment.Leading;
-                messageBox.Controls.FindControl("MessageBox.wnd:StaticTextMessage").Text = "GUI:TooManyPlayers".TranslateFormatted(CurrentMap.NumPlayers);
-                messageBox.Controls.FindControl("MessageBox.wnd:ButtonOk").Show();
-                return false;
+                var mapCache = _game.AssetStore.MapCaches.GetByName(mapName);
+                if (mapCache == null)
+                {
+                    Logger.Warn($"Map {mapName} not found");
+                }
+                else
+                {
+                    SetCurrentMap(mapCache);
+                }
             }
 
-            return true;
+            var mapWindow = _window.Controls.FindControl(_optionsPath+ MapWindow);
+            for (int i = 0; i < SkirmishGameSettings.MaxNumberOfPlayers; i++)
+            {
+                var startPositionButton = (Button) mapWindow.Controls[i];
+                startPositionButton.Text = string.Empty;
+                startPositionButton.Enabled = _game.SkirmishManager.Settings.LocalSlot?.Ready != true;
+            }
+
+            foreach (var slot in _game.SkirmishManager.Settings.Slots)
+            {
+                if (slot.StartPosition > 0)
+                {
+                    ((Button) mapWindow.Controls[slot.StartPosition - 1]).Text = (slot.Index + 1).ToString();
+                }
+
+                var colorCombo = (ComboBox) window.Controls.FindControl($"{_optionsPath}{ComboBoxColorPrefix}{slot.Index}");
+                if ((sbyte) colorCombo.Items[colorCombo.SelectedIndex].DataItem != slot.ColorIndex)
+                    colorCombo.SelectedIndex = Array.FindIndex(colorCombo.Items, x => (sbyte) x.DataItem == slot.ColorIndex - 1);
+
+                var teamCombo = (ComboBox) window.Controls.FindControl($"{_optionsPath}{ComboBoxTeamPrefix}{slot.Index}");
+                if ((sbyte) teamCombo.Items[teamCombo.SelectedIndex].DataItem != slot.Team)
+                    teamCombo.SelectedIndex = Array.FindIndex(teamCombo.Items, x => (sbyte) x.DataItem == slot.Team - 1);
+
+                var playerTemplateCombo = (ComboBox) window.Controls.FindControl($"{_optionsPath}{ComboBoxPlayerTemplatePrefix}{slot.Index}");
+                if (playerTemplateCombo.SelectedIndex != slot.FactionIndex)
+                    playerTemplateCombo.SelectedIndex = slot.FactionIndex;
+
+                var buttonAccept = (Button) window.Controls.FindControl($"{_optionsPath}{ButtonAcceptPrefix}{slot.Index}");
+                var playerCombo = (ComboBox) window.Controls.FindControl($"{_optionsPath}{ComboBoxPlayerPrefix}{slot.Index}");
+
+                var isLocalSlot = slot == _game.SkirmishManager.Settings.LocalSlot;
+                // if there is no player or AI in the slot, the other boxes should be disabled
+                var editable = (isLocalSlot && !slot.Ready) || (_game.SkirmishManager.IsHosting && slot.State is not SkirmishSlotState.Human and not SkirmishSlotState.Open and not SkirmishSlotState.Closed);
+
+                // is null in singleplayer games for the local player
+                if (playerCombo != null)
+                {
+                    playerCombo.Enabled = _game.SkirmishManager.IsHosting && !isLocalSlot;
+                    playerCombo.Controls[0].Text = slot.State switch
+                    {
+                        SkirmishSlotState.Open => "GUI:Open".Translate(),
+                        SkirmishSlotState.Closed => "GUI:Closed".Translate(),
+                        SkirmishSlotState.EasyArmy => "GUI:EasyAI".Translate(),
+                        SkirmishSlotState.MediumArmy => "GUI:MediumAI".Translate(),
+                        SkirmishSlotState.HardArmy => "GUI:HardAI".Translate(),
+                        SkirmishSlotState.Human => slot.PlayerName,
+                        _ => throw new ArgumentException("invalid slot state: " + slot.State)
+                    };
+                }
+
+                // only exists in multiplayer games
+                if (buttonAccept != null)
+                {
+                    buttonAccept.Visible = slot.State == SkirmishSlotState.Human;
+                    buttonAccept.Enabled = slot.Ready;
+                }
+
+                colorCombo.Enabled = editable;
+                teamCombo.Enabled = editable;
+                playerTemplateCombo.Enabled = editable;
+            };
+
+            var buttonStart = (Button) window.Controls.FindControl($"{_optionsPath}{ButtonStart}");
+            buttonStart.Enabled = _game.SkirmishManager.IsStartButtonEnabled();
         }
 
         private void OpenMapSelection(ControlCallbackContext context)
@@ -198,7 +404,7 @@ namespace OpenSage.Mods.Generals.Gui
             _window.Controls.FindControl(_optionsPath + ":StaticTextFaction").Hide();
             _window.Controls.FindControl(_optionsPath + ":StaticTextColor").Hide();
 
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < SkirmishGameSettings.MaxNumberOfPlayers; ++i)
             {
                 _window.Controls.FindControl(_optionsPath + ":ComboBoxTeam" + i.ToString()).Hide();
                 _window.Controls.FindControl(_optionsPath + ":ComboBoxPlayerTemplate" + i.ToString()).Hide();
@@ -219,7 +425,7 @@ namespace OpenSage.Mods.Generals.Gui
             _window.Controls.FindControl(_optionsPath + ":StaticTextFaction").Show();
             _window.Controls.FindControl(_optionsPath + ":StaticTextColor").Show();
 
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < SkirmishGameSettings.MaxNumberOfPlayers; ++i)
             {
                 _window.Controls.FindControl(_optionsPath + ":ComboBoxTeam" + i.ToString()).Show();
                 _window.Controls.FindControl(_optionsPath + ":ComboBoxPlayerTemplate" + i.ToString()).Show();
@@ -229,7 +435,7 @@ namespace OpenSage.Mods.Generals.Gui
             context.WindowManager.PopWindow();
         }
 
-        private void FillComboBoxOptions(string key, string[] options, int selectedIndex = 0)
+        private void FillComboBoxOptions(string key, string[] options, object[] dataItems = null, int selectedIndex = 0)
         {
             var comboBoxes = Control.GetSelfAndDescendants(_window).OfType<ComboBox>().Where(i => i.Name.StartsWith(key));
             foreach (var comboBox in comboBoxes)
@@ -238,104 +444,34 @@ namespace OpenSage.Mods.Generals.Gui
                 {
                     continue;
                 }
-                var items = options.Select(i => new ListBoxDataItem(null, new[] { i.Translate() }, comboBox.TextColor)).ToArray();
+                var items = options.Select((o, i) => new ListBoxDataItem(dataItems?[i], new[] { o.Translate() }, comboBox.TextColor)).ToArray();
                 comboBox.Items = items;
                 comboBox.SelectedIndex = selectedIndex;
             }
         }
 
-        private void FillColorComboBoxOptions(Tuple<string, ColorRgbaF>[] options, int selectedIndex = 0)
+        private void FillColorComboBoxOptions(Tuple<sbyte, string, ColorRgbaF>[] options, int selectedIndex = 0)
         {
             var comboBoxes = Control.GetSelfAndDescendants(_window).OfType<ComboBox>().Where(i => i.Name.StartsWith(_optionsPath + ComboBoxColorPrefix));
             foreach (var comboBox in comboBoxes)
             {
-                var items = options.Select(i =>
-                    new ListBoxDataItem(comboBox, new[] { i.Item1.Translate() }, i.Item2)).ToArray();
+                var items = options
+                    .Select(i => new ListBoxDataItem(i.Item1, new[] { i.Item2.Translate() }, i.Item3))
+                    .ToArray();
                 comboBox.Items = items;
                 comboBox.SelectedIndex = selectedIndex;
             }
         }
 
-        private int GetSelectedComboBoxIndex(string control)
-        {
-            var playerOwnerBox = (ComboBox) _window.Controls.FindControl(control);
-            var playerOwnerList = (ListBox) playerOwnerBox.Controls[2];
-
-            return playerOwnerList.SelectedIndex;
-        }
-
-        private void ParsePlayerSettings(Game game, out PlayerSetting?[] settings)
-        {
-            var settingsList = new List<PlayerSetting?>();
-            var rnd = new Random();
-            int selected = 0;
-
-            for (int i = 0; i < 8; i++)
-            {
-                var setting = new PlayerSetting();
-                setting.Owner = PlayerOwner.Player;
-
-                // Get the selected player owner
-                if (i >= 1)
-                {
-                    selected = GetSelectedComboBoxIndex(_optionsPath + ComboBoxPlayerPrefix + i);
-
-                    if (selected >= 2)
-                    {
-                        setting.Owner = PlayerOwner.EasyAi + (selected - 2);
-                    }
-                    else
-                    {
-                        // TODO: make sure the color isn't already used
-                        setting.Owner = PlayerOwner.None;
-                    }
-                }
-
-                if (setting.Owner == PlayerOwner.None)
-                {
-                    continue;
-                }
-
-                var mpColors = game.AssetStore.MultiplayerColors;
-
-                // Get the selected player color
-                selected = GetSelectedComboBoxIndex(_optionsPath + ComboBoxColorPrefix + i);
-                if (selected > 0)
-                {
-                    setting.Color = mpColors.GetByIndex(selected - 1).RgbColor;
-                }
-                else
-                {
-                    // TODO: make sure the color isn't already used
-                    var r = rnd.Next(mpColors.Count);
-                    setting.Color = mpColors.GetByIndex(r).RgbColor;
-                }
-
-                // Get the selected player faction
-                selected = GetSelectedComboBoxIndex(_optionsPath + ComboBoxPlayerTemplatePrefix + i);
-
-                if (selected > 0)
-                {
-                    setting.Template = _playableSides[selected - 1];
-                }
-                else
-                {
-                    // TODO: make sure the color isn't already used
-                    int r = rnd.Next(_playableSides.Count);
-                    setting.Template = _playableSides[r];
-                }
-
-                settingsList.Add(setting);
-            }
-
-            settings = settingsList.ToArray();
-        }
-
         public void SetCurrentMap(MapCache mapCache)
         {
+            _game.SkirmishManager.Settings.MapName = mapCache.Name;
+
+            Logger.Info("Set current map to " + mapCache.Name);
+
             CurrentMap = mapCache;
 
-            var mapWindow = _window.Controls.FindControl(_optionsPath + ":MapWindow");
+            var mapWindow = _window.Controls.FindControl(_optionsPath + MapWindow);
 
             MapUtils.SetMapPreview(mapCache, mapWindow, _game);
 

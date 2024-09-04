@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Numerics;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
@@ -9,11 +10,23 @@ namespace OpenSage.Logic.Object
 {
     internal sealed class ObjectCreationListManager
     {
-        public void Create(ObjectCreationList list, BehaviorUpdateContext context)
+        public IEnumerable<GameObject> Create(ObjectCreationList list, BehaviorUpdateContext context)
+        {
+            var objects = new List<GameObject>();
+
+            foreach (var item in list.Nuggets)
+            {
+                objects.AddRange(item.Execute(context));
+            }
+
+            return objects;
+        }
+
+        public void CreateAtPosition(ObjectCreationList list, BehaviorUpdateContext context, Vector3 position)
         {
             foreach (var item in list.Nuggets)
             {
-                item.Execute(context);
+                item.Execute(context, position);
             }
         }
     }
@@ -42,7 +55,7 @@ namespace OpenSage.Logic.Object
 
     public abstract class OCNugget
     {
-        internal abstract List<GameObject> Execute(BehaviorUpdateContext context);
+        internal abstract List<GameObject> Execute(BehaviorUpdateContext context, Vector3? position = null);
     }
 
     public sealed class CreateDebrisOCNugget : OCNugget
@@ -68,8 +81,8 @@ namespace OpenSage.Logic.Object
             { "MaxForcePitch", (parser, x) => x.MaxForcePitch = parser.ParseFloat() },
             { "SpinRate", (parser, x) => x.SpinRate = parser.ParseFloat() },
             { "ParticleSystem", (parser, x) => x.ParticleSystem = parser.ParseAssetReference() },
-            { "MinLifetime", (parser, x) => x.MinLifetime = parser.ParseInteger() },
-            { "MaxLifetime", (parser, x) => x.MaxLifetime = parser.ParseInteger() },
+            { "MinLifetime", (parser, x) => x.MinLifetime = parser.ParseTimeMillisecondsToLogicFrames() },
+            { "MaxLifetime", (parser, x) => x.MaxLifetime = parser.ParseTimeMillisecondsToLogicFrames() },
             { "BounceSound", (parser, x) => x.BounceSound = parser.ParseAssetReference() },
             { "OkToChangeModelColor", (parser, x) => x.OkToChangeModelColor = parser.ParseBoolean() },
             { "IgnorePrimaryObstacle", (parser, x) => x.IgnorePrimaryObstacle = parser.ParseBoolean() },
@@ -95,8 +108,8 @@ namespace OpenSage.Logic.Object
         public float MaxForcePitch { get; private set; }
         public float SpinRate { get; private set; }
         public string ParticleSystem { get; private set; }
-        public int MinLifetime { get; private set; }
-        public int MaxLifetime { get; private set; }
+        public LogicFrameSpan MinLifetime { get; private set; }
+        public LogicFrameSpan MaxLifetime { get; private set; }
         public string BounceSound { get; private set; }
         public bool OkToChangeModelColor { get; private set; }
         public bool IgnorePrimaryObstacle { get; private set; }
@@ -113,14 +126,21 @@ namespace OpenSage.Logic.Object
         [AddedIn(SageGame.CncGeneralsZeroHour)]
         public int RollRate { get; private set; }
 
-        internal override List<GameObject> Execute(BehaviorUpdateContext context)
+        internal override List<GameObject> Execute(BehaviorUpdateContext context, Vector3? position)
         {
-            var debrisObject = context.GameContext.GameObjects.Add("GenericDebris", context.GameObject.Owner);
+            // TODO: Cache this.
+            var debrisObjectDefinition = context.GameContext.AssetLoadContext.AssetStore.ObjectDefinitions.GetByName("GenericDebris");
+
+            var debrisObject = context.GameContext.GameLogic.CreateObject(debrisObjectDefinition, context.GameObject.Owner);
+
+            var lifeTime = context.GameContext.GetRandomLogicFrameSpan(MinLifetime, MaxLifetime);
+            debrisObject.LifeTime = context.LogicFrame + lifeTime;
 
             debrisObject.UpdateTransform(context.GameObject.Translation + Offset, context.GameObject.Rotation);
+            debrisObject.Die(DeathType.Normal);
 
             // Model
-            var w3dDebrisDraw = (W3dDebrisDraw) debrisObject.DrawModules[0];
+            var w3dDebrisDraw = (W3dDebrisDraw) debrisObject.Drawable.DrawModules[0];
             // TODO
             //var modelName = ModelNames[context.GameContext.Random.Next(ModelNames.Length)];
             var modelName = ModelNames[0];
@@ -132,11 +152,12 @@ namespace OpenSage.Logic.Object
 
             if (Disposition.Get(ObjectDisposition.SendItFlying))
             {
+                var forceMultiplier = 200 / 30.0f * Mass; // TODO: Is this right?
                 physicsBehavior.AddForce(
                     new Vector3(
-                        ((float)context.GameContext.Random.NextDouble() - 0.5f) * DispositionIntensity * 200,
-                        ((float) context.GameContext.Random.NextDouble() - 0.5f) * DispositionIntensity * 200,
-                        DispositionIntensity * 200));
+                        ((float) context.GameContext.Random.NextDouble() - 0.5f) * DispositionIntensity * forceMultiplier,
+                        ((float) context.GameContext.Random.NextDouble() - 0.5f) * DispositionIntensity * forceMultiplier,
+                        DispositionIntensity * forceMultiplier));
             }
 
             // TODO: Count, Disposition, DispositionIntensity
@@ -180,8 +201,8 @@ namespace OpenSage.Logic.Object
             { "ExtraBounciness", (parser, x) => x.ExtraBounciness = parser.ParseFloat() },
             { "ExtraFriction", (parser, x) => x.ExtraFriction = parser.ParseFloat() },
             { "ContainInsideSourceObject", (parser, x) => x.ContainInsideSourceObject = parser.ParseBoolean() },
-            { "MinLifetime", (parser, x) => x.MinLifetime = parser.ParseInteger() },
-            { "MaxLifetime", (parser, x) => x.MaxLifetime = parser.ParseInteger() },
+            { "MinLifetime", (parser, x) => x.MinLifetime = parser.ParseTimeMillisecondsToLogicFrames() },
+            { "MaxLifetime", (parser, x) => x.MaxLifetime = parser.ParseTimeMillisecondsToLogicFrames() },
             { "SkipIfSignificantlyAirborne", (parser, x) => x.SkipIfSignificantlyAirborne = parser.ParseBoolean() },
             { "DiesOnBadLand", (parser, x) => x.DiesOnBadLand = parser.ParseBoolean() },
             { "VelocityScale", (parser, x) => x.VelocityScale = parser.ParseFloat() },
@@ -210,7 +231,7 @@ namespace OpenSage.Logic.Object
 
         public LazyAssetReference<ObjectDefinition>[] ObjectNames { get; private set; }
         public Vector3 Offset { get; private set; }
-        public int Count { get; private set; }
+        public int Count { get; private set; } = 1;
         public bool SpreadFormation { get; private set; }
         public float MinDistanceAFormation { get; private set; }
         public float MinDistanceBFormation { get; private set; }
@@ -237,8 +258,8 @@ namespace OpenSage.Logic.Object
         public float ExtraBounciness { get; private set; }
         public float ExtraFriction { get; private set; }
         public bool ContainInsideSourceObject { get; private set; }
-        public int MinLifetime { get; private set; }
-        public int MaxLifetime { get; private set; }
+        public LogicFrameSpan MinLifetime { get; private set; }
+        public LogicFrameSpan MaxLifetime { get; private set; }
         public bool SkipIfSignificantlyAirborne { get; private set; }
 
         [AddedIn(SageGame.CncGeneralsZeroHour)]
@@ -310,22 +331,38 @@ namespace OpenSage.Logic.Object
         [AddedIn(SageGame.Bfme2)]
         public string WaypointSpawnPoints { get; private set; }
 
-        internal override List<GameObject> Execute(BehaviorUpdateContext context)
+        internal override List<GameObject> Execute(BehaviorUpdateContext context, Vector3? position)
         {
             var result = new List<GameObject>();
             // TODO
 
             foreach (var objectName in ObjectNames)
             {
-                var newGameObject = context.GameContext.GameObjects.Add(objectName.Value, context.GameObject.Owner);
-                // TODO: Count
-                // TODO: Disposition
-                // TODO: DispositionIntensity
-                // TODO: IgnorePrimaryObstacle
+                for (var i = 0; i < Count; i++)
+                {
+                    var newGameObject = context.GameContext.GameLogic.CreateObject(objectName.Value, context.GameObject.Owner);
+                    // TODO: Count
+                    // TODO: Disposition
+                    // TODO: DispositionIntensity
+                    // TODO: IgnorePrimaryObstacle
+                    if (position.HasValue)
+                    {
+                        newGameObject.UpdateTransform(position.Value);
+                    }
+                    else
+                    {
+                        newGameObject.UpdateTransform(context.GameObject.Translation + Offset, context.GameObject.Rotation);
+                    }
 
-                newGameObject.UpdateTransform(context.GameObject.Translation + Offset, context.GameObject.Rotation);
+                    var lifetimeUpdate = newGameObject.FindBehavior<LifetimeUpdate>();
+                    if (lifetimeUpdate != null)
+                    {
+                        var lifetime = context.GameContext.GetRandomLogicFrameSpan(MinLifetime, MaxLifetime);
+                        lifetimeUpdate.FrameToDie = context.LogicFrame + lifetime;
+                    }
 
-                result.Add(newGameObject);
+                    result.Add(newGameObject);
+                }
             }
 
             return result;
@@ -354,7 +391,7 @@ namespace OpenSage.Logic.Object
         public float MaxForcePitch { get; private set; }
         public float SpinRate { get; private set; }
 
-        internal override List<GameObject> Execute(BehaviorUpdateContext context)
+        internal override List<GameObject> Execute(BehaviorUpdateContext context, Vector3? position)
         {
             // TODO
             return new List<GameObject>();
@@ -375,7 +412,7 @@ namespace OpenSage.Logic.Object
 
         public string Weapon { get; private set; }
 
-        internal override List<GameObject> Execute(BehaviorUpdateContext context)
+        internal override List<GameObject> Execute(BehaviorUpdateContext context, Vector3? position)
         {
             // TODO
             return new List<GameObject>();
@@ -402,7 +439,7 @@ namespace OpenSage.Logic.Object
         public int DeliveryDecalRadius { get; private set; }
         public RadiusDecalTemplate DeliveryDecal { get; private set; }
 
-        internal override List<GameObject> Execute(BehaviorUpdateContext context)
+        internal override List<GameObject> Execute(BehaviorUpdateContext context, Vector3? position)
         {
             // TODO
             return new List<GameObject>();
@@ -489,7 +526,7 @@ namespace OpenSage.Logic.Object
         public int DeliveryDecalRadius { get; private set; }
         public RadiusDecalTemplate DeliveryDecal { get; private set; }
 
-        internal override List<GameObject> Execute(BehaviorUpdateContext context)
+        internal override List<GameObject> Execute(BehaviorUpdateContext context, Vector3? position)
         {
             // TODO
             return new List<GameObject>();

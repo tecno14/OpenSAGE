@@ -42,14 +42,52 @@ namespace OpenSage.Tests.Mathematics
         [InlineData(0, 0, 1, false)]
         [InlineData(-1, -1, 1, false)]
         [InlineData(6, 6, 1, false)]
-        [InlineData(2, -1.01f, 1, false)]
-        [InlineData(2, -1, 1, false)]
+        [InlineData(2.5f, -2.5f, 1, false)]
+        [InlineData(2.5f, -1, 1, true)]
         [InlineData(5, 0, 1, false)]
         [InlineData(3, 3, 5, true)]
         public void IntersectsCircle(float x, float y, float radius, bool expected)
         {
             var rect = TransformedRectangle.FromRectangle(new RectangleF(0, 0, 5, 5), 0.75f);
             Assert.Equal(expected, rect.Intersects(new Vector2(x, y), radius));
+        }
+
+        [Theory]
+        [InlineData(0, 0, 1, true)]
+        [InlineData(-1, -1, 1, false)]
+        [InlineData(6, 6, 1, false)]
+        [InlineData(2, -1, 1, true)]
+        [InlineData(2, -1.2f, 1, false)]
+        [InlineData(5, 0, 1, true)]
+        [InlineData(3, 3, 5, true)]
+        [InlineData(-0.9f, 0, 1, true)]
+        public void IntersectsCircle_AA(float x, float y, float radius, bool expected)
+        {
+            var rect = TransformedRectangle.FromRectangle(new RectangleF(0, 0, 5, 5), 0);
+            Assert.Equal(expected, rect.Intersects(new Vector2(x, y), radius));
+        }
+
+        [Theory]
+        [InlineData(0.9f, 0, 1, 1, 0, 0, 1, true)]
+        public void IntersectsCircle_AA_Translated(float x, float y, float width, float height, float cx, float cy, float radius, bool expected)
+        {
+            var rect = TransformedRectangle.FromRectangle(new RectangleF(x, y, width, height), 0);
+            Assert.Equal(expected, rect.Intersects(new Vector2(cx, cy), radius));
+        }
+
+        [Theory]
+        [InlineData(0, 0, false)]
+        [InlineData(2, 0, true)]
+        [InlineData(4, 0, false)]
+        [InlineData(4, 4, false)]
+        [InlineData(0, 4, false)]
+        [InlineData(2, 2, true)]
+        [InlineData(0, 2, true)]
+        [InlineData(2.1f, 2, true)]
+        public void Contains(float x, float y, bool expected)
+        {
+            var sut = TransformedRectangle.FromRectangle(new RectangleF(0, 0, 4, 4), 0.75f);
+            Assert.Equal(expected, sut.Contains(new Vector2(x, y)));
         }
     }
 }

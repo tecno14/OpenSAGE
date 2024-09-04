@@ -13,6 +13,17 @@ namespace OpenSage.Logic.Object
         private Queue<SupplyAIUpdate> _unitsApproaching;
         private bool _usesWaitingBones;
 
+        private Vector3 _position1;
+        private Vector3 _position2;
+        private Vector3 _position3;
+        private int _numApproachPositions1;
+        private bool _unknownBool;
+        private readonly List<Vector3> _approachPositions = new();
+        private readonly List<uint> _approachObjectIds = new();
+        private readonly List<bool> _unknownBools = new();
+        private uint _unknownObjectId;
+        private ushort _unknownInt1;
+
         internal DockUpdate(GameObject gameObject, DockUpdateModuleData moduleData)
         {
             _gameObject = gameObject;
@@ -24,7 +35,7 @@ namespace OpenSage.Logic.Object
         private Vector3 GetActionBone()
         {
             // TODO: might also be DOCKSTART or DOCKEND
-            var (actionModelInstance, actionBone) = _gameObject.FindBone($"DOCKACTION");
+            var (actionModelInstance, actionBone) = _gameObject.Drawable.FindBone($"DOCKACTION");
 
             if (actionModelInstance != null && actionBone != null)
             {
@@ -36,7 +47,7 @@ namespace OpenSage.Logic.Object
         private Vector3 GetDockWaitingBone(int id)
         {
             var identifier = id.ToString("D2");
-            var (modelInstance, bone) = _gameObject.FindBone($"DOCKWAITING{identifier}");
+            var (modelInstance, bone) = _gameObject.Drawable.FindBone($"DOCKWAITING{identifier}");
             return modelInstance.AbsoluteBoneTransforms[bone.Index].Translation;
         }
 
@@ -103,6 +114,57 @@ namespace OpenSage.Logic.Object
                         MoveObjectsForward();
                         break;
                 }
+            }
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistVector3(ref _position1);
+            reader.PersistVector3(ref _position2);
+            reader.PersistVector3(ref _position3);
+            reader.PersistInt32(ref _numApproachPositions1);
+            reader.PersistBoolean(ref _unknownBool);
+
+            reader.PersistListWithUInt32Count(
+                _approachPositions,
+                static (StatePersister persister, ref Vector3 item) =>
+                {
+                    persister.PersistVector3Value(ref item);
+                });
+
+            reader.PersistListWithUInt32Count(
+                _approachObjectIds,
+                static (StatePersister persister, ref uint item) =>
+                {
+                    persister.PersistObjectIDValue(ref item);
+                });
+
+            reader.PersistListWithUInt32Count(
+                _unknownBools,
+                static (StatePersister persister, ref bool item) =>
+                {
+                    persister.PersistBooleanValue(ref item);
+                });
+
+            reader.PersistObjectID(ref _unknownObjectId);
+
+            reader.PersistUInt16(ref _unknownInt1);
+            if (_unknownInt1 != 0 && _unknownInt1 != 1)
+            {
+                throw new InvalidStateException();
+            }
+
+            var unknown3 = true;
+            reader.PersistBoolean(ref unknown3);
+            if (!unknown3)
+            {
+                throw new InvalidStateException();
             }
         }
     }

@@ -1,16 +1,16 @@
-﻿using OpenSage.Data.Ini;
-using OpenSage.Mathematics.FixedMath;
+﻿using FixedMath.NET;
+using OpenSage.Data.Ini;
 
 namespace OpenSage.Logic.Object
 {
     public sealed class HighlanderBody : ActiveBody
     {
-        internal HighlanderBody(GameObject gameObject, HighlanderBodyModuleData moduleData)
-            : base(gameObject, moduleData)
+        internal HighlanderBody(GameObject gameObject, GameContext context, HighlanderBodyModuleData moduleData)
+            : base(gameObject, context, moduleData)
         {
         }
 
-        public override void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, TimeInterval time)
+        public override void DoDamage(DamageType damageType, Fix64 amount, DeathType deathType, GameObject damageDealer)
         {
             // TODO: Don't think this is right.
             if (damageType == DamageType.Unresistable)
@@ -26,9 +26,18 @@ namespace OpenSage.Logic.Object
 
                 if (Health <= Fix64.Zero)
                 {
-                    GameObject.Die(deathType, time);
+                    GameObject.Die(deathType);
                 }
             }
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
         }
     }
 
@@ -42,9 +51,9 @@ namespace OpenSage.Logic.Object
         private static new readonly IniParseTable<HighlanderBodyModuleData> FieldParseTable = ActiveBodyModuleData.FieldParseTable
             .Concat(new IniParseTable<HighlanderBodyModuleData>());
 
-        internal override BodyModule CreateBodyModule(GameObject gameObject)
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new HighlanderBody(gameObject, this);
+            return new HighlanderBody(gameObject, context, this);
         }
     }
 }

@@ -1,23 +1,29 @@
-﻿using System.IO;
-using OpenSage.FileFormats;
+﻿using System.Numerics;
 
 namespace OpenSage.Logic.Object
 {
-    public abstract class CollideModule : BehaviorModule
+    public abstract class CollideModule : BehaviorModule, ICollideModule
     {
-        internal override void Load(BinaryReader reader)
-        {
-            var version = reader.ReadVersion();
-            if (version != 1)
-            {
-                throw new InvalidDataException();
-            }
+        // TODO: Make this abstract.
+        public virtual void OnCollide(GameObject collidingObject) { }
 
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
             base.Load(reader);
+            reader.EndObject();
         }
     }
 
     public abstract class CollideModuleData : BehaviorModuleData
     {
+        public override ModuleKinds ModuleKinds => ModuleKinds.Collide;
+    }
+
+    public interface ICollideModule
+    {
+        void OnCollide(GameObject collidingObject);
     }
 }

@@ -1,35 +1,86 @@
 ﻿using System;
-using System.IO;
+using ImGuiNET;
 using OpenSage.Data.Ini;
-using OpenSage.FileFormats;
 
 namespace OpenSage.Logic.Object
 {
     public sealed class PowerPlantUpdate : UpdateModule
     {
-        // TODO
+        private readonly GameObject _gameObject;
+        private readonly PowerPlantUpdateModuleData _moduleData;
 
-        internal override void Load(BinaryReader reader)
+        private bool _rodsExtended;
+
+        private LogicFrame _rodsExtendedEndFrame;
+
+        internal PowerPlantUpdate(GameObject gameObject, PowerPlantUpdateModuleData moduleData)
         {
-            var version = reader.ReadVersion();
-            if (version != 1)
+            _gameObject = gameObject;
+            _moduleData = moduleData;
+        }
+
+        internal void ExtendRods()
+        {
+            _rodsExtended = true;
+
+            _gameObject.Drawable.ModelConditionFlags.Set(ModelConditionFlag.PowerPlantUpgrading, true);
+
+            _rodsExtendedEndFrame = _gameObject.GameContext.GameLogic.CurrentFrame + _moduleData.RodsExtendTime;
+        }
+
+        // China powerplant overcharge needs to be able to turn off
+        internal void RetractRods()
+        {
+            _rodsExtended = false;
+            _gameObject.Drawable.ModelConditionFlags.Set(ModelConditionFlag.PowerPlantUpgrading, false);
+            _gameObject.Drawable.ModelConditionFlags.Set(ModelConditionFlag.PowerPlantUpgraded, false);
+
+            _rodsExtendedEndFrame = LogicFrame.MaxValue;
+        }
+
+        internal override void Update(BehaviorUpdateContext context)
+        {
+            base.Update(context);
+
+            if (_rodsExtended && _rodsExtendedEndFrame < context.LogicFrame)
             {
-                throw new InvalidDataException();
+                _gameObject.Drawable.ModelConditionFlags.Set(ModelConditionFlag.PowerPlantUpgrading, false);
+                _gameObject.Drawable.ModelConditionFlags.Set(ModelConditionFlag.PowerPlantUpgraded, true);
+                _rodsExtendedEndFrame = LogicFrame.MaxValue;
+            }
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistBoolean(ref _rodsExtended);
+        }
+
+        internal override void DrawInspector()
+        {
+            ImGui.LabelText("Rods extended", _rodsExtended.ToString());
+            if (ImGui.Button("Extend Rods"))
+            {
+                ExtendRods();
             }
 
-            base.Load(reader);
+            ImGui.SameLine();
 
-            var unknown = reader.ReadByte();
-            if (unknown != 0)
+            if (ImGui.Button("Retract Rods"))
             {
-                throw new InvalidDataException();
+                RetractRods();
             }
         }
     }
 
     /// <summary>
-    /// Allows this object to act as an (upgradeable) power supply, and allows this object to use 
-    /// the <see cref="ModelConditionFlag.PowerPlantUpgrading"/> and 
+    /// Allows this object to act as an (upgradeable) power supply, and allows this object to use
+    /// the <see cref="ModelConditionFlag.PowerPlantUpgrading"/> and
     /// <see cref="ModelConditionFlag.PowerPlantUpgraded"/> model condition states.
     /// </summary>
     public sealed class PowerPlantUpdateModuleData : UpdateModuleData
@@ -38,14 +89,14 @@ namespace OpenSage.Logic.Object
 
         private static readonly IniParseTable<PowerPlantUpdateModuleData> FieldParseTable = new IniParseTable<PowerPlantUpdateModuleData>
         {
-            { "RodsExtendTime", (parser, x) => x.RodsExtendTime = parser.ParseTimeMilliseconds() }
+            { "RodsExtendTime", (parser, x) => x.RodsExtendTime = parser.ParseTimeMillisecondsToLogicFrames() }
         };
 
-        public TimeSpan RodsExtendTime { get; private set; }
+        public LogicFrameSpan RodsExtendTime { get; private set; }
 
         internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
         {
-            return new PowerPlantUpdate();
+            return new PowerPlantUpdate(gameObject, this);
         }
     }
 }

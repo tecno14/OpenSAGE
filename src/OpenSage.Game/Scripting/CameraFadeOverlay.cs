@@ -1,6 +1,4 @@
-﻿using System.IO;
-using System.Numerics;
-using OpenSage.FileFormats;
+﻿using System.Numerics;
 using OpenSage.Graphics.Rendering;
 using OpenSage.Gui;
 using OpenSage.Mathematics;
@@ -8,7 +6,7 @@ using Veldrid;
 
 namespace OpenSage.Scripting
 {
-    internal sealed class CameraFadeOverlay : DisposableBase
+    internal sealed class CameraFadeOverlay : DisposableBase, IPersistableObject
     {
         private readonly Game _game;
         private readonly DrawingContext2D _drawingContext;
@@ -36,19 +34,19 @@ namespace OpenSage.Scripting
                 RenderPipeline.GameOutputDescription));
         }
 
-        internal void Load(BinaryReader reader)
+        public void Persist(StatePersister reader)
         {
-            FadeType = reader.ReadUInt32AsEnum<CameraFadeType>();
+            reader.PersistEnum(ref FadeType);
 
-            From = reader.ReadSingle();
-            To = reader.ReadSingle();
+            reader.PersistSingle(ref From);
+            reader.PersistSingle(ref To);
 
-            CurrentValue = reader.ReadSingle();
-            CurrentFrame = reader.ReadUInt32();
+            reader.PersistSingle(ref CurrentValue);
+            reader.PersistUInt32(ref CurrentFrame);
 
-            FramesIncrease = reader.ReadUInt32();
-            FramesHold = reader.ReadUInt32();
-            FramesDecrease = reader.ReadUInt32();
+            reader.PersistUInt32(ref FramesIncrease);
+            reader.PersistUInt32(ref FramesHold);
+            reader.PersistUInt32(ref FramesDecrease);
         }
 
         public void Update()
@@ -92,7 +90,9 @@ namespace OpenSage.Scripting
             _drawingContext.Begin(
                 commandList,
                 _game.AssetStore.LoadContext.StandardGraphicsResources.LinearClampSampler,
-                outputSize);
+                outputSize,
+                // TODO: Pass correct time here
+                TimeInterval.Zero);
 
             switch (FadeType)
             {

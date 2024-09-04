@@ -22,16 +22,16 @@ namespace OpenSage.Diagnostics.AssetViews
             _renderedView = AddDisposable(new RenderedView(context,
                 createGameObjects: gameObjects =>
                 {
-                    _gameObject = gameObjects.Add(objectDefinition, context.Game.CivilianPlayer);
+                    _gameObject = gameObjects.CreateObject(objectDefinition, null);
                 }));
 
-            _modelConditionStates = _gameObject.ModelConditionStates.ToList();
+            _modelConditionStates = _gameObject.Drawable.ModelConditionStates.ToList();
             _selectedIndex = 0;
         }
 
         public override void Draw()
         {
-            ImGui.BeginChild("object states", new Vector2(200, 0), true, 0);
+            ImGui.BeginChild("object states", new Vector2(200, 0), ImGuiChildFlags.Border, 0);
 
             for (var i = 0; i < _modelConditionStates.Count; i++)
             {
@@ -39,7 +39,7 @@ namespace OpenSage.Diagnostics.AssetViews
 
                 if (ImGui.Selectable(modelConditionState.DisplayName, i == _selectedIndex))
                 {
-                    _gameObject.CopyModelConditionFlags(modelConditionState);
+                    _gameObject.Drawable.CopyModelConditionFlags(modelConditionState);
                     _selectedIndex = i;
                 }
             }

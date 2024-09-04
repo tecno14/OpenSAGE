@@ -3,17 +3,17 @@ using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using OpenSage.Content;
 using OpenSage.Content.Loaders;
-using OpenSage.Data;
 using OpenSage.Data.Map;
 using OpenSage.Data.Tga;
 using OpenSage.Graphics;
-using OpenSage.Graphics.Rendering;
 using OpenSage.Graphics.Rendering.Water;
 using OpenSage.Graphics.Shaders;
+using OpenSage.IO;
+using OpenSage.Logic.Object;
 using OpenSage.Mathematics;
+using OpenSage.Rendering;
 using OpenSage.Utilities;
 using OpenSage.Utilities.Extensions;
 using SixLabors.ImageSharp;
@@ -23,17 +23,23 @@ using SixLabors.ImageSharp.Processing.Processors.Transforms;
 using Veldrid;
 using Veldrid.ImageSharp;
 using Rectangle = OpenSage.Mathematics.Rectangle;
+using RectangleF = OpenSage.Mathematics.RectangleF;
 
 namespace OpenSage.Terrain
 {
     public sealed class Terrain : DisposableBase
     {
-        private readonly ShaderSet _shaderSet;
-        private readonly Pipeline _pipeline;
-
+        private readonly AssetLoadContext _loadContext;
         private readonly GraphicsDevice _graphicsDevice;
 
         private readonly ConstantBuffer<TerrainShaderResources.TerrainMaterialConstants> _materialConstantsBuffer;
+
+        private readonly Material _material;
+        private readonly TerrainPatchIndexBufferCache _indexBufferCache;
+
+        private readonly RenderBucket _renderBucket;
+
+        private readonly List<TerrainPatch> _patches = new();
 
         internal const int PatchSize = 17;
 
@@ -41,27 +47,26 @@ namespace OpenSage.Terrain
 
         public HeightMap HeightMap { get; }
 
-        public IReadOnlyList<TerrainPatch> Patches { get; }
-
-        public ResourceSet CloudResourceSet { get; }
-
         private float _causticsIndex;
 
         private const uint NumOfCausticsAnimation = 32;
 
-        internal readonly RadiusCursorDecals RadiusCursorDecals;
+        internal readonly Texture CloudTexture;
 
-        internal readonly ResourceSet RadiusCursorDecalsResourceSet;
+        internal RadiusCursorDecals RadiusCursorDecals => _loadContext.ShaderResources.Global.RadiusCursorDecals;
 
-        internal Terrain(MapFile mapFile, AssetLoadContext loadContext)
+        internal Terrain(MapFile mapFile, HeightMap heightMap, AssetLoadContext loadContext, RenderScene scene)
         {
             Map = mapFile;
 
-            HeightMap = new HeightMap(mapFile.HeightMapData);
+            HeightMap = heightMap;
 
+            _renderBucket = scene.CreateRenderBucket("Terrain", 0);
+
+            _loadContext = loadContext;
             _graphicsDevice = loadContext.GraphicsDevice;
 
-            var indexBufferCache = AddDisposable(new TerrainPatchIndexBufferCache(loadContext.GraphicsDevice));
+            _indexBufferCache = AddDisposable(new TerrainPatchIndexBufferCache(loadContext.GraphicsDevice));
 
             var tileDataTexture = AddDisposable(CreateTileDataTexture(
                 loadContext.GraphicsDevice,
@@ -80,8 +85,6 @@ namespace OpenSage.Terrain
 
             var textureDetailsBuffer = AddDisposable(loadContext.GraphicsDevice.CreateStaticStructuredBuffer(textureDetails));
 
-            var terrainPipeline = loadContext.ShaderResources.Terrain.Pipeline;
-
             _materialConstantsBuffer = AddDisposable(
                 new ConstantBuffer<TerrainShaderResources.TerrainMaterialConstants>(
                     loadContext.GraphicsDevice, "TerrainMaterialConstants"));
@@ -95,9 +98,8 @@ namespace OpenSage.Terrain
 
             var macroTexture = loadContext.AssetStore.Textures.GetByName(mapFile.EnvironmentData?.MacroTexture ?? "tsnoiseurb.dds");
 
-            RadiusCursorDecals = AddDisposable(new RadiusCursorDecals(loadContext.AssetStore, loadContext.GraphicsDevice));
-
             var casuticsTextures = BuildCausticsTextureArray(loadContext.AssetStore);
+
             var materialResourceSet = AddDisposable(loadContext.ShaderResources.Terrain.CreateMaterialResourceSet(
                 _materialConstantsBuffer.Buffer,
                 tileDataTexture,
@@ -107,32 +109,16 @@ namespace OpenSage.Terrain
                 macroTexture,
                 casuticsTextures));
 
-            RadiusCursorDecalsResourceSet = AddDisposable(loadContext.ShaderResources.RadiusCursor.CreateRadiusCursorDecalsResourceSet(
-                RadiusCursorDecals.TextureArray,
-                RadiusCursorDecals.DecalConstants,
-                RadiusCursorDecals.DecalsBuffer));
+            _material = AddDisposable(
+                new Material(
+                    loadContext.ShaderResources.Terrain,
+                    loadContext.ShaderResources.Terrain.Pipeline,
+                    materialResourceSet,
+                    SurfaceType.Opaque));
 
-            Patches = CreatePatches(
-                loadContext.GraphicsDevice,
-                HeightMap,
-                indexBufferCache,
-                materialResourceSet,
-                RadiusCursorDecalsResourceSet);
+            CloudTexture = loadContext.AssetStore.Textures.GetByName(mapFile.EnvironmentData?.CloudTexture ?? "tscloudmed.dds");
 
-            var cloudTexture = loadContext.AssetStore.Textures.GetByName(mapFile.EnvironmentData?.CloudTexture ?? "tscloudmed.dds");
-
-            var cloudResourceLayout = AddDisposable(loadContext.GraphicsDevice.ResourceFactory.CreateResourceLayout(
-                new ResourceLayoutDescription(
-                    new ResourceLayoutElementDescription("Global_CloudTexture", ResourceKind.TextureReadOnly, ShaderStages.Fragment))));
-
-            CloudResourceSet = AddDisposable(loadContext.GraphicsDevice.ResourceFactory.CreateResourceSet(
-                new ResourceSetDescription(
-                    cloudResourceLayout,
-                    cloudTexture.Texture)));
-            CloudResourceSet.Name = "Cloud resource set";
-
-            _shaderSet = loadContext.ShaderResources.Terrain.ShaderSet;
-            _pipeline = terrainPipeline;
+            OnHeightMapChanged();
         }
 
         private int GetCausticsTextureIndex(in TimeInterval time)
@@ -202,30 +188,110 @@ namespace OpenSage.Terrain
             return result;
         }
 
-        private List<TerrainPatch> CreatePatches(
-            GraphicsDevice graphicsDevice,
-            HeightMap heightMap,
-            TerrainPatchIndexBufferCache indexBufferCache,
-            ResourceSet materialResourceSet,
-            ResourceSet radiusCursorDecalsResourceSet)
+        public bool ImpassableAt(Vector3 worldPosition)
+        {
+            var mapCoords = HeightMap.GetTilePosition(worldPosition);
+            if (!mapCoords.HasValue)
+            {
+                // we're outside of the map, so definitely impassable
+                return true;
+            }
+
+            var (x, y) = mapCoords.Value;
+            return Map.BlendTileData.Impassability[x, y];
+        }
+
+        /// <summary>
+        /// Adjusts the terrain height within the specified collider. Does not consider z-axis.
+        /// </summary>
+        internal void SetMaxHeight(in Collider collider, in float newHeight)
+        {
+            // set terrain underneath geometry
+            var aaBounds = collider.AxisAlignedBoundingArea;
+
+            // this seems like the easiest (read: laziest) way to pick up all the coordinates within the bounds?
+            for (var x = (int) aaBounds.Left; x < aaBounds.Right; x++)
+            for (var y = (int) aaBounds.Top; y < aaBounds.Bottom; y++) // top to bottom is correct
+            {
+                var testCoords = new Vector2(x, y);
+                if (!collider.Contains(testCoords))
+                {
+                    continue;
+                }
+
+                // get current tile coords
+                var tilePosition = HeightMap.GetTilePosition(testCoords); // z doesn't matter
+                if (tilePosition == null)
+                {
+                    continue; // area is outside map bounds
+                }
+
+                // set tile height
+                var (tileX, tileY) = tilePosition.Value;
+                HeightMap.LowerHeight(tileX, tileY, newHeight);
+            }
+
+            // update terrain patches in affected area
+            OnHeightMapChanged(collider.AxisAlignedBoundingArea);
+        }
+
+        /// <summary>
+        /// Disposes of terrain patches within the bounding area and replaces them with new patches.
+        /// </summary>
+        private void OnHeightMapChanged(in RectangleF bounds)
+        {
+            for (var i = 0; i < _patches.Count; i++)
+            {
+                var patch = _patches[i];
+
+                if (patch.BoundingBox.Intersects(bounds))
+                {
+                    var newPatch = new TerrainPatch(HeightMap, patch.Bounds, _graphicsDevice,
+                        _indexBufferCache, patch.MaterialPass.ForwardPass);
+                    patch.Dispose();
+                    RemoveToDispose(patch);
+
+                    _renderBucket.RemoveObject(patch);
+
+                    _renderBucket.AddObject(newPatch);
+
+                    _patches[i] = newPatch;
+                }
+            }
+        }
+
+        internal void OnHeightMapChanged()
+        {
+            foreach (var patch in _patches)
+            {
+                patch.Dispose();
+                RemoveToDispose(patch);
+
+                _renderBucket.RemoveObject(patch);
+            }
+
+            _patches.Clear();
+
+            CreatePatches();
+        }
+
+        private void CreatePatches()
         {
             const int numTilesPerPatch = PatchSize - 1;
 
-            var heightMapWidthMinusOne = heightMap.Width - 1;
+            var heightMapWidthMinusOne = HeightMap.Width - 1;
             var numPatchesX = heightMapWidthMinusOne / numTilesPerPatch;
             if (heightMapWidthMinusOne % numTilesPerPatch != 0)
             {
                 numPatchesX += 1;
             }
 
-            var heightMapHeightMinusOne = heightMap.Height - 1;
+            var heightMapHeightMinusOne = HeightMap.Height - 1;
             var numPatchesY = heightMapHeightMinusOne / numTilesPerPatch;
             if (heightMapHeightMinusOne % numTilesPerPatch != 0)
             {
                 numPatchesY += 1;
             }
-
-            var patches = new List<TerrainPatch>();
 
             for (var y = 0; y < numPatchesY; y++)
             {
@@ -237,20 +303,22 @@ namespace OpenSage.Terrain
                     var patchBounds = new Rectangle(
                         patchX,
                         patchY,
-                        Math.Min(PatchSize, heightMap.Width - patchX),
-                        Math.Min(PatchSize, heightMap.Height - patchY));
+                        Math.Min(PatchSize, HeightMap.Width - patchX),
+                        Math.Min(PatchSize, HeightMap.Height - patchY));
 
-                    patches.Add(AddDisposable(new TerrainPatch(
-                        heightMap,
-                        patchBounds,
-                        graphicsDevice,
-                        indexBufferCache,
-                        materialResourceSet,
-                        radiusCursorDecalsResourceSet)));
+                    var patch = AddDisposable(
+                        new TerrainPatch(
+                            HeightMap,
+                            patchBounds,
+                            _graphicsDevice,
+                            _indexBufferCache,
+                            _material));
+
+                    _renderBucket.AddObject(patch);
+
+                    _patches.Add(patch);
                 }
             }
-
-            return patches;
         }
 
         private static Texture CreateTileDataTexture(
@@ -496,24 +564,24 @@ namespace OpenSage.Terrain
             for (uint level = 0; level < texture.MipLevels; level++)
             {
                 var image = texture.Images[level];
-                if (!image.TryGetSinglePixelSpan(out Span<Rgba32> pixelSpan))
+                if (!image.DangerousTryGetSinglePixelMemory(out var pixelSpan))
                 {
                     throw new InvalidOperationException("Unable to get image pixelspan.");
                 }
-                fixed (void* pin = &MemoryMarshal.GetReference(pixelSpan))
+                using (var pin = pixelSpan.Pin())
                 {
                     var map = gd.Map(staging, MapMode.Write, level);
                     var rowWidth = (uint) (image.Width * 4);
                     if (rowWidth == map.RowPitch)
                     {
-                        Unsafe.CopyBlock(map.Data.ToPointer(), pin, (uint) (image.Width * image.Height * 4));
+                        Unsafe.CopyBlock(map.Data.ToPointer(), pin.Pointer, (uint) (image.Width * image.Height * 4));
                     }
                     else
                     {
                         for (uint y = 0; y < image.Height; y++)
                         {
                             var dstStart = (byte*) map.Data.ToPointer() + y * map.RowPitch;
-                            var srcStart = (byte*) pin + y * rowWidth;
+                            var srcStart = (byte*) pin.Pointer + y * rowWidth;
                             Unsafe.CopyBlock(dstStart, srcStart, rowWidth);
                         }
                     }
@@ -532,7 +600,7 @@ namespace OpenSage.Terrain
         {
             float? closestIntersection = null;
 
-            foreach (var patch in Patches)
+            foreach (var patch in _patches)
             {
                 patch.Intersect(ray, ref closestIntersection);
             }
@@ -554,17 +622,6 @@ namespace OpenSage.Terrain
                 : -1;
 
             _materialConstantsBuffer.Update(_graphicsDevice);
-        }
-
-        internal void BuildRenderList(RenderList renderList)
-        {
-            foreach (var patch in Patches)
-            {
-                patch.BuildRenderList(
-                    renderList,
-                    _shaderSet,
-                    _pipeline);
-            }
         }
     }
 }

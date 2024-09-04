@@ -1,6 +1,6 @@
 ﻿using OpenSage.Data.Ini;
 using OpenSage.Mathematics;
-using OpenSage.Mathematics.FixedMath;
+using FixedMath.NET;
 
 namespace OpenSage.Logic.Object
 {
@@ -37,7 +37,6 @@ namespace OpenSage.Logic.Object
                 { "DamageMaxHeightAboveTerrain", (parser, x) => x.DamageMaxHeightAboveTerrain = parser.ParseInteger() },
                 { "MinRadius", (parser, x) => x.MinRadius = parser.ParseInteger() },
                 { "LostLeadershipUselessAgainst", (parser, x) => x.LostLeadershipUselessAgainst = parser.ParseEnum<ObjectKinds>() }
-
             });
 
         /// <summary>
@@ -121,7 +120,7 @@ namespace OpenSage.Logic.Object
                 //TODO: increase damage with context.Weapon.Template.WeaponBonuses
             }
 
-            context.Weapon.CurrentTarget.DoDamage(DamageType, (Fix64) Damage, DeathType, context.Time);
+            context.Weapon.CurrentTarget.DoDamage(DamageType, (Fix64) Damage, DeathType, context.Weapon.ParentGameObject);
         }
     }
 }

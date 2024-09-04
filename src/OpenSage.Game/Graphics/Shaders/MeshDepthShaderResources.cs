@@ -1,50 +1,38 @@
 ﻿using OpenSage.Graphics.Rendering.Shadows;
+using OpenSage.Rendering;
 using Veldrid;
 
 namespace OpenSage.Graphics.Shaders
 {
-    internal sealed class MeshDepthShaderResources : ShaderResourcesBase
+    internal sealed class MeshDepthShaderResources : ShaderSetBase
     {
-        public readonly Pipeline TriangleStripPipeline;
-        public readonly Pipeline TriangleListPipeline;
+        public readonly Material Material;
 
         public MeshDepthShaderResources(
-            GraphicsDevice graphicsDevice,
-            GlobalShaderResources globalShaderResources,
-            MeshShaderResources meshShaderResources)
-            : base(
-                graphicsDevice,
-                "MeshDepth",
-                new GlobalResourceSetIndices(0u, LightingType.None, null, null, null, 2u),
-                MeshShaderResources.MeshVertex.VertexDescriptors)
+            ShaderSetStore store)
+            : base(store, "MeshDepth", MeshShaderResources.MeshVertex.VertexDescriptors)
         {
-            var depthRasterizerState = RasterizerStateDescription.Default;
+            var depthRasterizerState = RasterizerStateDescriptionUtility.DefaultFrontIsCounterClockwise;
             depthRasterizerState.DepthClipEnabled = false;
             depthRasterizerState.ScissorTestEnabled = false;
 
-            var resourceLayouts = new[]
-            {
-                globalShaderResources.GlobalConstantsResourceLayout,
-                meshShaderResources.MeshConstantsResourceLayout,
-                meshShaderResources.RenderItemConstantsResourceLayout,
-                meshShaderResources.SkinningResourceLayout
-            };
-
-            Pipeline CreatePipeline(PrimitiveTopology topology)
-            {
-                return graphicsDevice.ResourceFactory.CreateGraphicsPipeline(
+            var pipeline = AddDisposable(
+                GraphicsDevice.ResourceFactory.CreateGraphicsPipeline(
                     new GraphicsPipelineDescription(
                         BlendStateDescription.SingleDisabled,
                         DepthStencilStateDescription.DepthOnlyLessEqual,
                         depthRasterizerState,
-                        topology,
-                        ShaderSet.Description,
-                        resourceLayouts,
-                        ShadowData.DepthPassDescription));
-            }
+                        PrimitiveTopology.TriangleList,
+                        Description,
+                        ResourceLayouts,
+                        ShadowData.DepthPassDescription)));
 
-            TriangleStripPipeline = AddDisposable(CreatePipeline(PrimitiveTopology.TriangleStrip));
-            TriangleListPipeline = AddDisposable(CreatePipeline(PrimitiveTopology.TriangleList));
+            Material = AddDisposable(
+                new Material(
+                    this,
+                    pipeline,
+                    null,
+                    SurfaceType.Opaque));
         }
     }
 }

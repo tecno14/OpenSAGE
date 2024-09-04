@@ -4,11 +4,11 @@ using OpenSage.Scripting;
 
 namespace OpenSage.Data.Map
 {
-    public sealed class PlayerScriptsList : Asset
+    public sealed class PlayerScriptsList : Asset, IPersistableObject
     {
         public const string AssetName = "PlayerScriptsList";
 
-        public ScriptList[] ScriptLists { get; private set; }
+        public ScriptList[] ScriptLists { get; internal set; }
 
         internal static PlayerScriptsList Parse(BinaryReader reader, MapParseContext context)
         {
@@ -43,6 +43,28 @@ namespace OpenSage.Data.Map
                     scriptList.WriteTo(writer, assetNames);
                 }
             });
+        }
+
+        public void Persist(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.PersistArrayWithUInt32Length(
+                ScriptLists,
+                static (StatePersister persister, ref ScriptList scriptList) =>
+                {
+                    persister.BeginObject();
+
+                    var hasScripts = scriptList.Scripts.Length > 0;
+                    persister.PersistBoolean(ref hasScripts);
+
+                    if (hasScripts)
+                    {
+                        persister.PersistObject(scriptList);
+                    }
+
+                    persister.EndObject();
+                });
         }
     }
 }

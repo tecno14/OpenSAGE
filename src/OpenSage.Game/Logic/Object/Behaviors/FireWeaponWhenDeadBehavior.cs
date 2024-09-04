@@ -4,6 +4,36 @@ using OpenSage.Mathematics;
 
 namespace OpenSage.Logic.Object
 {
+    public sealed class FireWeaponWhenDeadBehavior : BehaviorModule, IUpgradeableModule
+    {
+        private readonly UpgradeLogic _upgradeLogic;
+
+        internal FireWeaponWhenDeadBehavior(FireWeaponWhenDeadBehaviorModuleData moduleData)
+        {
+            _upgradeLogic = new UpgradeLogic(moduleData.UpgradeData, OnUpgrade);
+        }
+
+        public bool CanUpgrade(UpgradeSet existingUpgrades) => _upgradeLogic.CanUpgrade(existingUpgrades);
+
+        public void TryUpgrade(UpgradeSet completedUpgrades) => _upgradeLogic.TryUpgrade(completedUpgrades);
+
+        private void OnUpgrade()
+        {
+            // TODO
+        }
+
+        internal override void Load(StatePersister reader)
+        {
+            reader.PersistVersion(1);
+
+            reader.BeginObject("Base");
+            base.Load(reader);
+            reader.EndObject();
+
+            reader.PersistObject(_upgradeLogic);
+        }
+    }
+
     public sealed class FireWeaponWhenDeadBehaviorModuleData : UpgradeModuleData
     {
         internal static FireWeaponWhenDeadBehaviorModuleData Parse(IniParser parser) => parser.ParseBlock(FieldParseTable);
@@ -29,5 +59,10 @@ namespace OpenSage.Logic.Object
 
         [AddedIn(SageGame.Bfme)]
         public Vector3 WeaponOffset { get; private set; }
+
+        internal override BehaviorModule CreateModule(GameObject gameObject, GameContext context)
+        {
+            return new FireWeaponWhenDeadBehavior(this);
+        }
     }
 }

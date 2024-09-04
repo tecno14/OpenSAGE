@@ -4,6 +4,7 @@ using System.IO;
 using System.Numerics;
 using OpenSage.Data.Utilities.Extensions;
 using OpenSage.FileFormats;
+using OpenSage.Gui.Apt;
 using OpenSage.Gui.Apt.ActionScript;
 using OpenSage.Mathematics;
 
@@ -71,7 +72,8 @@ namespace OpenSage.Data.Apt.FrameItems
         public int Character { get; private set; }
         public Matrix2x2 RotScale { get; private set; }
         public Vector2 Translation { get; private set; }
-        public ColorRgba Color { get; private set; }
+        public ColorRgba TintColor { get; private set; }
+        public ColorRgba AdditiveColor { get; private set; }
         public float Ratio { get; private set; }
         public string Name { get; private set; }
         public int ClipDepth { get; private set; }
@@ -102,11 +104,15 @@ namespace OpenSage.Data.Apt.FrameItems
             }
 
             if (placeobject.Flags.HasFlag(PlaceObjectFlags.HasColorTransform))
-                placeobject.Color = reader.ReadColorRgba();
+            {
+                placeobject.TintColor = reader.ReadColorRgba();
+                placeobject.AdditiveColor = reader.ReadColorRgba();
+            }
             else
+            {
                 reader.ReadColorRgba();
-
-            var unknown = reader.ReadUInt32();
+                reader.ReadColorRgba();
+            }
 
             if (placeobject.Flags.HasFlag(PlaceObjectFlags.HasRatio))
                 placeobject.Ratio = reader.ReadSingle();
@@ -133,6 +139,88 @@ namespace OpenSage.Data.Apt.FrameItems
             }
 
             return placeobject;
+        }
+
+        public static PlaceObject Create(int depth)
+        {
+            return new PlaceObject
+            {
+                Depth = depth
+            };
+        }
+
+        public static PlaceObject Create(int depth, int character)
+        {
+            var placeObject = new PlaceObject
+            {
+                Flags = PlaceObjectFlags.HasCharacter,
+                Depth = depth,
+                Character = character
+            };
+            return placeObject;
+        }
+
+        public void SetCharacter(int? character)
+        {
+            if (character is int value)
+            {
+                Flags |= PlaceObjectFlags.HasCharacter;
+                Character = value;
+            }
+            else
+            {
+                Flags &= ~PlaceObjectFlags.HasCharacter;
+            }
+        }
+
+        public void SetTransform(in ItemTransform transform)
+        {
+            var matrix = transform.GeometryRotation;
+            matrix.Translation = transform.GeometryTranslation;
+            SetTransform(matrix);
+            SetColorTransform((transform.TintColorTransform.ToColorRgba(),
+                               transform.AdditiveColorTransform.ToColorRgba()));
+        }
+
+        public void SetTransform(in Matrix3x2? matrix)
+        {
+            if (matrix is Matrix3x2 value)
+            {
+                Flags |= PlaceObjectFlags.HasMatrix;
+                RotScale = new Matrix2x2(value);
+                Translation = value.Translation;
+            }
+            else
+            {
+                Flags &= ~PlaceObjectFlags.HasMatrix;
+            }
+        }
+
+        public void SetColorTransform(in (ColorRgba tint, ColorRgba add)? colorTransform)
+        {
+            if (colorTransform is (ColorRgba tint, ColorRgba add))
+            {
+                Flags |= PlaceObjectFlags.HasColorTransform;
+                TintColor = tint;
+                AdditiveColor = add;
+            }
+            else
+            {
+                Flags &= ~PlaceObjectFlags.HasColorTransform;
+            }
+        }
+
+        public void SetName(string name)
+        {
+            Name = name;
+            if (Name is not null)
+            {
+                Flags |= PlaceObjectFlags.HasName;
+            }
+            else
+            {
+                Flags &= ~PlaceObjectFlags.HasName;
+            }
         }
     }
 }

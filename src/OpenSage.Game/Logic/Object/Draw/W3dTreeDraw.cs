@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
+using OpenSage.Client;
 using OpenSage.Content;
 using OpenSage.Data.Ini;
 using OpenSage.FX;
@@ -9,7 +10,6 @@ using OpenSage.Graphics.Cameras;
 using OpenSage.Graphics.Rendering;
 using OpenSage.Graphics.Shaders;
 using OpenSage.Mathematics;
-using Veldrid;
 
 namespace OpenSage.Logic.Object
 {
@@ -35,13 +35,15 @@ namespace OpenSage.Logic.Object
                 Camera camera,
                 bool castsShadow,
                 MeshShaderResources.RenderItemConstantsPS renderItemConstantsPS,
-                List<string> hiddenSubObjects = null)
+                Dictionary<string, bool> shownSubObjects = null,
+                Dictionary<string, bool> hiddenSubObjects = null)
         {
             _modelInstance.BuildRenderList(
                 renderList,
                 camera,
                 castsShadow,
                 renderItemConstantsPS,
+                shownSubObjects,
                 hiddenSubObjects);
         }
 
@@ -141,7 +143,7 @@ namespace OpenSage.Logic.Object
         [AddedIn(SageGame.Bfme)]
         public string MorphTree { get; private set; }
 
-        internal override DrawModule CreateDrawModule(GameObject gameObject, GameContext context)
+        internal override DrawModule CreateDrawModule(Drawable drawable, GameContext context)
         {
             return new W3dTreeDraw(this, context);
         }

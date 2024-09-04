@@ -1,6 +1,8 @@
 ﻿using System.Collections.Generic;
 using System.Numerics;
 using OpenSage.Data.Map;
+using OpenSage.Graphics.Cameras;
+using OpenSage.Gui;
 using OpenSage.Logic.Object;
 using OpenSage.Mathematics;
 using OpenSage.Terrain;
@@ -32,7 +34,7 @@ namespace OpenSage.Navigation
             _heightMap = heightMap;
         }
 
-        private Vector2 GetNodePosition(Node node)
+        public Vector2 GetNodePosition(Node node)
         {
             var xyz =_heightMap.GetPosition(node.X, node.Y);
             return new Vector2(xyz.X, xyz.Y);
@@ -115,12 +117,15 @@ namespace OpenSage.Navigation
 
         public void UpdateAreaPassability(GameObject gameObject, bool passable)
         {
-            if (gameObject.Collider == null)
+            foreach (var collider in gameObject.Colliders)
             {
-                return;
+                UpdateAreaPassability(collider, passable);
             }
+        }
 
-            var axisAlignedBoundingArea = gameObject.Collider.AxisAlignedBoundingArea;
+        public void UpdateAreaPassability(Collider collider, bool passable)
+        {
+            var axisAlignedBoundingArea = collider.AxisAlignedBoundingArea;
 
             var bottomLeft = new Vector3(axisAlignedBoundingArea.X, axisAlignedBoundingArea.Y, 0);
             var bottomLeftNode = GetClosestNode(bottomLeft);
@@ -133,20 +138,26 @@ namespace OpenSage.Navigation
                 return;
             }
 
-            var area = gameObject.Collider.BoundingArea;
-
-            for (var x = 0; x < topRightNode.X - bottomLeftNode.X; x++)
+            for (var x = bottomLeftNode.X; x < topRightNode.X; x++)
             {
-                for (var y = 0; y < topRightNode.Y - bottomLeftNode.Y; y++)
+                for (var y = bottomLeftNode.Y; y < topRightNode.Y; y++)
                 {
-                    var node = _graph.GetNode(bottomLeftNode.X + x, bottomLeftNode.Y + y);
+                    var node = _graph.GetNode(x, y);
                     var position = GetNodePosition(node);
-                    if (area.Contains(position))
+                    var terrainHeight = _heightMap.GetHeight(position.X, position.Y);
+                    if (collider.Transform.Translation.Z <= terrainHeight &&
+                        terrainHeight <= collider.Transform.Translation.Z + collider.Height &&
+                        collider.Contains(position)) // TODO: should we use a rectangle here instead of only a point?
                     {
                         node.Passability = passable ? Passability.Passable : Passability.Impassable;
                     }
                 }
             }
+        }
+
+        public void DebugDraw(DrawingContext2D context, Camera camera)
+        {
+            _graph.DebugDraw(context, camera, GetNodePosition, _heightMap.GetHeight);
         }
     }
 }

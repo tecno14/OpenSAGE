@@ -11,6 +11,7 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
         include:
@@ -25,21 +26,26 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
-    - name: Install .NET Core
-      uses: actions/setup-dotnet@v1
+    - name: Install .NET
+      uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 3.1.100
+        dotnet-version: '8.x'
 
     - name: Test
-      run: dotnet test src --configuration Release --filter Category!=Interactive
+      run: dotnet test src --configuration Release --filter Category!=Interactive --collect:"XPlat Code Coverage"
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
 
     - name: Publish
-      run: dotnet publish src/OpenSage.Launcher --configuration Release --runtime ${{ matrix.runtime }} --output build/artifacts/${{ matrix.runtime }}
+      run: dotnet publish src/OpenSage.Launcher --configuration Release --runtime ${{ matrix.runtime }} --self-contained --output build/artifacts/${{ matrix.runtime }}
 
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.runtime }}
         path: build/artifacts/${{ matrix.runtime }}
@@ -53,17 +59,17 @@ jobs:
 
     steps:
     - name: Download Artifacts win-x64
-      uses: actions/download-artifact@v1
+      uses: actions/download-artifact@v4
       with:
         name: win-x64
 
     - name: Download Artifacts osx-x64
-      uses: actions/download-artifact@v1
+      uses: actions/download-artifact@v4
       with:
         name: osx-x64
 
     - name: Download Artifacts linux-x64
-      uses: actions/download-artifact@v1
+      uses: actions/download-artifact@v4
       with:
         name: linux-x64
 
